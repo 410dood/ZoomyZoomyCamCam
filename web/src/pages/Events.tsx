@@ -1,10 +1,12 @@
-import { useEffect, useState } from "react";
+﻿import { useEffect, useState } from "react";
 import { api, CamEvent, Camera, fmtTime, Segment } from "../api";
 
 export default function Events({ cameras }: { cameras: Camera[] }) {
   const [events, setEvents] = useState<CamEvent[]>([]);
   const [cameraId, setCameraId] = useState<number | "">("");
   const [label, setLabel] = useState("");
+  const [review, setReview] = useState<"all" | "alerts">("all");
+  const [alertLabels, setAlertLabels] = useState<string[]>(["person"]);
   const [open, setOpen] = useState<CamEvent | null>(null);
   const [playing, setPlaying] = useState<{ segment: Segment; offset: number } | null>(null);
   const [noClip, setNoClip] = useState<number | null>(null);
@@ -32,6 +34,13 @@ export default function Events({ cameras }: { cameras: Camera[] }) {
   };
 
   useEffect(() => {
+    api
+      .settings()
+      .then((s) => setAlertLabels(s.alert_labels ?? ["person"]))
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
     load();
     const t = setInterval(load, 5000); // events appear as they happen
     return () => clearInterval(t);
@@ -39,11 +48,23 @@ export default function Events({ cameras }: { cameras: Camera[] }) {
   }, [cameraId, label]);
 
   const labels = [...new Set(events.map((e) => e.label))];
+  const shown =
+    review === "alerts" ? events.filter((e) => alertLabels.includes(e.label)) : events;
 
   return (
     <>
       <h1>Events</h1>
       <div className="row" style={{ marginBottom: 16 }}>
+        <button className={review === "all" ? "primary" : "ghost"} onClick={() => setReview("all")}>
+          All
+        </button>
+        <button
+          className={review === "alerts" ? "primary" : "ghost"}
+          onClick={() => setReview("alerts")}
+          title={`alert labels: ${alertLabels.join(", ")}`}
+        >
+          🔔 Alerts
+        </button>
         <select value={cameraId} onChange={(e) => setCameraId(e.target.value === "" ? "" : Number(e.target.value))}>
           <option value="">all cameras</option>
           {cameras.map((c) => (
@@ -60,17 +81,17 @@ export default function Events({ cameras }: { cameras: Camera[] }) {
             </option>
           ))}
         </select>
-        <span className="muted">{events.length} events · auto-refreshing</span>
+        <span className="muted">{shown.length} events · auto-refreshing</span>
       </div>
 
-      {events.length === 0 ? (
+      {shown.length === 0 ? (
         <div className="empty">
           No events yet. They appear when a detect-enabled camera sees motion and the AI
           recognizes an object.
         </div>
       ) : (
         <div className="event-grid">
-          {events.map((ev) => (
+          {shown.map((ev) => (
             <div className="event-card" key={ev.id} onClick={() => setOpen(ev)}>
               {ev.snapshot ? (
                 <img src={`/api/snapshots/${ev.snapshot}`} alt={ev.label} loading="lazy" />

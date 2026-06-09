@@ -55,6 +55,21 @@ export default function Settings({ onError }: { onError: (e: string) => void }) 
               />
             </label>
             <label className="field">
+              alert objects (shown in the Alerts review tab)
+              <input
+                type="text"
+                value={(s.alert_labels ?? []).join(", ")}
+                onChange={(e) =>
+                  set({
+                    alert_labels: e.target.value
+                      .split(",")
+                      .map((x) => x.trim())
+                      .filter(Boolean),
+                  })
+                }
+              />
+            </label>
+            <label className="field">
               min confidence (0-1)
               <input
                 type="number" step="0.05" min="0" max="1"

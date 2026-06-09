@@ -124,6 +124,9 @@ pub struct Settings {
     pub webhook_url: String,
     /// Transcode camera audio into recordings as AAC.
     pub record_audio: bool,
+    /// Labels that count as "alerts" in the review UI (Frigate-style split);
+    /// everything else files under plain "detections".
+    pub alert_labels: Vec<String>,
 }
 
 impl Default for Settings {
@@ -154,6 +157,7 @@ impl Default for Settings {
             go2rtc_api_port: 1984,
             webhook_url: String::new(),
             record_audio: false,
+            alert_labels: ["person"].map(String::from).to_vec(),
         }
     }
 }

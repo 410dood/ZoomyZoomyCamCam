@@ -28,7 +28,7 @@ which of those features we adopt, in what order.*
 | 8 | Storage dashboard (per-camera usage, est. days left) | UniFi | ✅ shipped |
 | 9 | Sub-stream detect role (decode low-res, record 4K) | Frigate detect role, BI dual-streaming | ✅ shipped (validated on real Dahua 4K) |
 | 10 | Timeline scrubber UI across segments + event markers | UniFi Protect | ✅ shipped |
-| 11 | Review split: alerts (person/car in zone) vs detections | Frigate 0.14 | planned |
+| 11 | Review split: alerts (person/car in zone) vs detections | Frigate 0.14 | ✅ shipped |
 | 12 | Event clips (pre/post-roll MP4 export) | Frigate clips, BI export | ✅ shipped |
 | 13 | ONVIF discovery + PTZ | Blue Iris, Frigate 0.16 | planned (needs PTZ hardware to validate) |
 | 14 | Face recognition / LPR | Frigate 0.16 (free since 0.16) | later — model sourcing + privacy defaults |

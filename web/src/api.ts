@@ -61,6 +61,7 @@ export interface Settings {
   go2rtc_api_port: number;
   webhook_url: string;
   record_audio: boolean;
+  alert_labels: string[];
 }
 
 export interface CamStorage {
