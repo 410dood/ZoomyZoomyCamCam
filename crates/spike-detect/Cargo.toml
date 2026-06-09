@@ -26,9 +26,9 @@ ort = { version = "=2.0.0-rc.10", default-features = false, features = [
 ] }
 
 # Image loading / resizing for preprocessing.
-image = "0.25"
+image.workspace = true
 # Tensor manipulation for pre/post-processing.
-ndarray = "0.16"
+ndarray.workspace = true
 
 # --- Per-OS GPU execution providers --------------------------------------
 # Each OS gets its native accelerator compiled in. On Windows that's DirectML

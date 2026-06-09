@@ -4,8 +4,9 @@ A self-hosted, **cross-platform** (Windows + macOS + Linux) home surveillance / 
 platform — think Blue Iris, but not chained to Windows, with Frigate-class AI object
 detection that runs natively on Apple Silicon and any DirectX 12 GPU.
 
-> Status: **Phase 0 — spikes.** We are de-risking the two hardest parts before
-> building the real core. See [`docs/01-research-and-architecture.md`](docs/01-research-and-architecture.md)
+> Status: **v0.1 — working vertical slice.** Live grid, continuous recording with
+> retention, and motion-gated AI detection events all work end-to-end behind one
+> binary + web UI. See [`docs/01-research-and-architecture.md`](docs/01-research-and-architecture.md)
 > for the full survey, architecture, and roadmap.
 
 ## Why another NVR?
@@ -19,47 +20,52 @@ detection that runs natively on Apple Silicon and any DirectX 12 GPU.
 ## Architecture at a glance
 
 ```
-cameras ──RTSP──▶ go2rtc (ingest + WebRTC) ──▶ recorder (packets→disk)
+cameras ──RTSP──▶ go2rtc (ingest + WebRTC) ──▶ recorder (ffmpeg -c copy → mp4 segments)
                           │                  └─▶ motion gate ─▶ AI detector (ONNX/YOLO)
                           └──WebRTC──▶ web UI            └─▶ core API + SQLite (events/config)
 ```
 
 The design deliberately reuses two battle-tested binaries — **go2rtc** (camera
-protocols + WebRTC) and **FFmpeg** (codec edge cases) — and writes first-party Rust
-for the recorder, motion gate, AI detector, and core API. AI is portable because the
-same exported YOLO `.onnx` runs through ONNX Runtime with a per-OS GPU backend.
-
-## Phase 0 spikes
-
-Two programs that, between them, prove ~80% of the project is feasible:
-
-- **[`crates/spike-live`](crates/spike-live)** — launches go2rtc against one real
-  camera and gives you a live WebRTC view in the browser. Proves ingest → low-latency
-  live viewing.
-- **[`crates/spike-detect`](crates/spike-detect)** — runs a YOLOv8 model on an image
-  via ONNX Runtime, auto-selecting the GPU backend for your OS (DirectML / CoreML /
-  CUDA / CPU). Proves cross-platform accelerated AI.
-
-Each crate has its own README with exact run steps.
-
-## Prerequisites
-
-- **Rust** (stable) — install via [rustup](https://rustup.rs).
-- **go2rtc** binary — for the live spike. Download from
-  [go2rtc releases](https://github.com/AlexxIT/go2rtc/releases) and either put it on
-  your `PATH` or point `GO2RTC_BIN` at it. The spike will tell you if it can't find it.
-- A **YOLOv8 ONNX model** — for the detect spike. See that crate's README for the
-  one-line export command.
+protocols + WebRTC) and **FFmpeg** (codec edge cases, packet-copy segmenting) — and
+writes first-party Rust for everything else. AI is portable because the same exported
+YOLO `.onnx` runs through ONNX Runtime with a per-OS GPU backend (DirectML / CoreML /
+CUDA, CPU fallback).
 
 ## Quick start
 
-```bash
-# Live view (replace with your camera's RTSP URL)
-cargo run -p spike-live -- --rtsp "rtsp://user:pass@192.168.1.50:554/stream1"
+Prerequisites:
 
-# Object detection on a sample image
-cargo run -p spike-detect -- --model yolov8n.onnx --image sample.jpg
+- **Rust** (stable) via [rustup](https://rustup.rs); on Windows also the MSVC Build
+  Tools (VS installer → "Desktop development with C++" or just the
+  `VC.Tools.x86.x64` + Windows SDK components).
+- **Node.js** ≥ 20 (to build the web UI once).
+- **go2rtc** from [releases](https://github.com/AlexxIT/go2rtc/releases) → drop it at
+  `./bin/go2rtc(.exe)`, or on `PATH`, or set `GO2RTC_BIN`.
+- **ffmpeg** on `PATH` (e.g. `winget install Gyan.FFmpeg`).
+- A **YOLOv8 ONNX model** at `./yolov8n.onnx`:
+  `pip install ultralytics && yolo export model=yolov8n.pt format=onnx imgsz=640 opset=12`
+
+Build and run:
+
+```bash
+# one-time: build the web UI
+cd web && npm install && npm run build && cd ..
+
+# run the platform (API + UI on :8080, go2rtc on :1984/:8554/:8555)
+cargo run -p zoomy
 ```
+
+Open **http://localhost:8080**, go to *Cameras*, and add your camera's RTSP URL
+(any go2rtc source string works — `rtsp://`, `ffmpeg:`, `exec:`, ONVIF, …). You get:
+
+- **Live** — WebRTC grid of all enabled cameras (sub-second latency)
+- **Events** — motion-gated AI detections with annotated snapshots, filterable
+- **Recordings** — continuous 60 s MP4 segments, browser playback, retention by
+  age and total size
+- **Settings** — object filter, confidence, motion threshold, retention, all live
+
+No camera handy? Make a fake one (a panning video on loop) and add it with source
+`exec:ffmpeg -re -stream_loop -1 -i driveway.mp4 -c copy -rtsp_transport tcp -f rtsp {output}`.
 
 ## Layout
 
@@ -68,9 +74,14 @@ ZoomyZoomyCamCam/
 ├── Cargo.toml                # workspace
 ├── docs/                     # research, architecture, roadmap
 ├── config/                   # example go2rtc config
+├── web/                      # React + TypeScript UI (Vite)
 └── crates/
-    ├── spike-live/           # Phase 0 spike 1
-    └── spike-detect/         # Phase 0 spike 2
+    ├── core/                 # `zoomy` binary: API + SQLite + supervisors
+    ├── detector/             # YOLOv8 via ONNX Runtime, per-OS GPU EP
+    ├── motion/               # cheap pixel-diff motion gate
+    ├── recorder/             # ffmpeg packet-copy segments + retention
+    ├── spike-live/           # Phase 0 spike (kept as standalone validation)
+    └── spike-detect/         # Phase 0 spike (kept as standalone validation)
 ```
 
 ## License

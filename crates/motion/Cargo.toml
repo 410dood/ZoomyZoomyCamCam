@@ -1,0 +1,11 @@
+[package]
+name = "motion"
+version = "0.1.0"
+description = "Cheap pixel-diff motion gate that decides when AI detection is worth running"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+image.workspace = true

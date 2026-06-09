@@ -1,0 +1,35 @@
+[package]
+name = "detector"
+version = "0.1.0"
+description = "YOLOv8 object detection via ONNX Runtime with per-OS GPU execution providers"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+tracing.workspace = true
+image.workspace = true
+ndarray.workspace = true
+serde.workspace = true
+
+# Same pinned ort + feature set validated by spike-detect (see CLAUDE.md gotchas):
+# `std` gates commit_from_file + Error impls; `copy-dylibs` puts onnxruntime.dll
+# next to the exe on Windows.
+ort = { version = "=2.0.0-rc.10", default-features = false, features = [
+    "std",
+    "ndarray",
+    "download-binaries",
+    "copy-dylibs",
+] }
+
+# --- Per-OS GPU execution providers (same as spike-detect) -----------------
+[target.'cfg(target_os = "windows")'.dependencies]
+ort = { version = "=2.0.0-rc.10", default-features = false, features = ["directml"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+ort = { version = "=2.0.0-rc.10", default-features = false, features = ["coreml"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+ort = { version = "=2.0.0-rc.10", default-features = false, features = ["cuda"] }

@@ -1,0 +1,142 @@
+import { FormEvent, useEffect, useState } from "react";
+import { api, Settings as S } from "../api";
+
+export default function Settings({ onError }: { onError: (e: string) => void }) {
+  const [s, setS] = useState<S | null>(null);
+  const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    api.settings().then(setS).catch((e) => onError(String(e)));
+  }, [onError]);
+
+  if (!s) return <p className="muted">Loading…</p>;
+
+  const set = (patch: Partial<S>) => {
+    setS({ ...s, ...patch });
+    setSaved(false);
+  };
+
+  const save = async (e: FormEvent) => {
+    e.preventDefault();
+    try {
+      setS(await api.saveSettings(s));
+      setSaved(true);
+    } catch (err) {
+      onError(String(err));
+    }
+  };
+
+  const num = (v: string, fallback: number) => {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : fallback;
+  };
+
+  return (
+    <>
+      <h1>Settings</h1>
+      <form onSubmit={save}>
+        <div className="card">
+          <h2>Detection</h2>
+          <div className="row">
+            <label className="field">
+              objects (comma-separated, empty = all)
+              <input
+                type="text"
+                style={{ minWidth: 380 }}
+                value={s.detect_labels.join(", ")}
+                onChange={(e) =>
+                  set({
+                    detect_labels: e.target.value
+                      .split(",")
+                      .map((x) => x.trim())
+                      .filter(Boolean),
+                  })
+                }
+              />
+            </label>
+            <label className="field">
+              min confidence (0-1)
+              <input
+                type="number" step="0.05" min="0" max="1"
+                value={s.confidence}
+                onChange={(e) => set({ confidence: num(e.target.value, s.confidence) })}
+              />
+            </label>
+            <label className="field">
+              motion threshold (0-1)
+              <input
+                type="number" step="0.005" min="0" max="1"
+                value={s.motion_threshold}
+                onChange={(e) => set({ motion_threshold: num(e.target.value, s.motion_threshold) })}
+              />
+            </label>
+            <label className="field">
+              sample interval (ms)
+              <input
+                type="number" step="100" min="100"
+                value={s.poll_ms}
+                onChange={(e) => set({ poll_ms: num(e.target.value, s.poll_ms) })}
+              />
+            </label>
+            <label className="field">
+              event cooldown (s)
+              <input
+                type="number" min="0"
+                value={s.event_cooldown_secs}
+                onChange={(e) => set({ event_cooldown_secs: num(e.target.value, s.event_cooldown_secs) })}
+              />
+            </label>
+            <label className="toggle field">
+              force CPU
+              <input type="checkbox" checked={s.force_cpu} onChange={() => set({ force_cpu: !s.force_cpu })} />
+            </label>
+          </div>
+        </div>
+
+        <div className="card">
+          <h2>Recording &amp; retention</h2>
+          <div className="row">
+            <label className="field">
+              segment length (s)
+              <input
+                type="number" min="10"
+                value={s.segment_seconds}
+                onChange={(e) => set({ segment_seconds: num(e.target.value, s.segment_seconds) })}
+              />
+            </label>
+            <label className="field">
+              keep at most (days)
+              <input
+                type="number" min="1"
+                value={s.retention_days}
+                onChange={(e) => set({ retention_days: num(e.target.value, s.retention_days) })}
+              />
+            </label>
+            <label className="field">
+              keep at most (GB)
+              <input
+                type="number" min="1"
+                value={s.retention_gb}
+                onChange={(e) => set({ retention_gb: num(e.target.value, s.retention_gb) })}
+              />
+            </label>
+            <label className="field">
+              model path
+              <input
+                type="text"
+                value={s.model_path}
+                onChange={(e) => set({ model_path: e.target.value })}
+              />
+            </label>
+          </div>
+        </div>
+
+        <div className="row">
+          <button className="primary">Save</button>
+          {saved && <span style={{ color: "var(--ok)" }}>Saved ✓</span>}
+          <span className="muted">Changes apply within a few seconds — no restart needed.</span>
+        </div>
+      </form>
+    </>
+  );
+}

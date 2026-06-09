@@ -14,22 +14,35 @@ The differentiator: Blue Iris is Windows-only; Frigate needs Linux/Docker plus
 Coral/Nvidia. We combine **Moonfire-class efficient recording** with **portable
 GPU-accelerated AI** so the same model runs on Apple Silicon and any DirectX 12 GPU.
 
-## Current status: Phase 0 (spikes) — validated on Windows, 2026-06-09
+## Current status: v0.1 vertical slice — Phases 1-4 working on Windows, 2026-06-09
 
-Both spikes compile, lint clean, and run end-to-end on Windows 11:
+The platform runs end-to-end behind one binary (`cargo run -p zoomy`) + web UI:
 
-- **spike-detect:** YOLOv8n via `ort` 2.0.0-rc.10 with the **DirectML** EP active —
-  8.7 ms GPU vs 39.2 ms CPU (~4.5×) on bus.jpg, correct detections (4 person + bus).
-  Required the `std` + `copy-dylibs` ort features (see Known gotchas).
-- **spike-live:** go2rtc 1.9.14 launched as a child process; verified WebRTC playback
-  in Chrome using a synthetic camera (`exec:ffmpeg -re -stream_loop -1 -i sample.mp4
-  -c copy -rtsp_transport tcp -f rtsp {output}` as the stream source — handy when no
-  real RTSP camera is on the network). A frame pulled from go2rtc's
-  `/api/frame.jpeg?src=cam1` fed into spike-detect closes the loop camera → AI.
+- **Phase 0 (spikes):** validated 2026-06-09 — DirectML EP active, 8.7 ms GPU vs
+  39.2 ms CPU on bus.jpg; WebRTC playback verified in Chrome. Spike crates are kept
+  as standalone validation tools.
+- **Phase 1 (core):** `crates/core` (`zoomy` bin) — Axum API + SQLite (cameras,
+  events, segments, settings JSON blob), go2rtc supervised as a child with config
+  generated from the registry + watchdog, React/TS web UI in `web/` (live grid via
+  go2rtc stream.html iframes, events, recordings, cameras, settings).
+- **Phase 2 (recorder):** `crates/recorder` — ffmpeg `-c copy -f segment` per camera
+  off go2rtc's RTSP restream, strftime-named 60 s MP4 segments (faststart), SQLite
+  index, retention by age + total bytes. Reconciliation loop self-heals dead ffmpeg.
+- **Phase 3 (motion gate):** `crates/motion` — 64×64 grayscale diff, noise floor 25,
+  changed-pixel fraction vs threshold.
+- **Phase 4 (detector):** `crates/detector` (lib form of spike-detect) — one shared
+  ONNX session; pipeline polls go2rtc `/api/frame.jpeg` ~1 fps per camera, motion
+  gate → YOLO → label/conf filter → per-(camera,label) cooldown → event + annotated
+  snapshot.
 
-Remaining Phase 0 exit criteria: validate against a **real RTSP camera** and on
-**macOS (CoreML)**. Everything else (core API, recorder, motion gate, detector
-service) **is not built yet.** Do not assume those modules exist.
+Verified E2E with synthetic cameras (panning bus video over `exec:ffmpeg` loop):
+live WebRTC grid, person/bus events with red-box snapshots, segment recording +
+browser playback. A static camera correctly produces zero events (gate works).
+
+Not yet validated: real RTSP camera hardware, macOS (CoreML), Linux (CUDA).
+Known soft spots: go2rtc restart on camera CRUD briefly drops live streams; frame
+sampling needs camera keyframe interval ≲ a few seconds (real cameras: fine; demo
+videos need `-g`), recordings have no audio yet (`-an`).
 
 ```
 cameras ──RTSP──▶ go2rtc (ingest + WebRTC) ──▶ recorder (packets→disk)   [Phase 2]
@@ -65,12 +78,18 @@ ZoomyZoomyCamCam/
 ├── README.md
 ├── docs/01-research-and-architecture.md   # field survey, architecture, roadmap
 ├── config/go2rtc.example.yaml             # reference multi-camera config
+├── web/                       # React + TypeScript UI (Vite); build -> web/dist
 └── crates/
-    ├── spike-live/    # Phase 0 spike 1: RTSP -> go2rtc -> WebRTC live view
-    └── spike-detect/  # Phase 0 spike 2: YOLOv8 via ONNX Runtime, GPU per-OS
+    ├── core/          # `zoomy` binary: Axum API + SQLite + supervisors + pipeline
+    ├── detector/      # lib: YOLOv8 via ONNX Runtime, per-OS GPU EP
+    ├── motion/        # lib: pixel-diff motion gate
+    ├── recorder/      # lib: ffmpeg packet-copy segments + retention
+    ├── spike-live/    # Phase 0 spike 1 (kept as standalone validation)
+    └── spike-detect/  # Phase 0 spike 2 (kept as standalone validation)
 ```
 
-Each spike crate has its own README with run steps and success criteria.
+Runtime state lives in `data/` (gitignored): `zoomy.db`, `go2rtc.yaml` (generated),
+`recordings/{camera}/`, `snapshots/`.
 
 ## Build / run / test
 
@@ -78,19 +97,24 @@ Each spike crate has its own README with run steps and success criteria.
 # Build everything
 cargo build
 
+# Tests (db, motion gate, NMS/decode, segment scan/retention)
+cargo test
+
 # Lint + format (CI should enforce these)
 cargo clippy --all-targets -- -D warnings
 cargo fmt --all
 
-# Run spike 1 (needs the go2rtc binary on PATH or $GO2RTC_BIN; see crate README)
-cargo run -p spike-live -- --rtsp "rtsp://user:pass@192.168.1.50:554/stream1"
+# Web UI (one-time, or after changing web/)
+cd web && npm install && npm run build
 
-# Run spike 2 (needs a yolov8n.onnx; export command in crates/spike-detect/README.md)
+# Run the platform: http://localhost:8080 (needs bin/go2rtc.exe, ffmpeg on PATH,
+# yolov8n.onnx in repo root — see README prerequisites)
+cargo run -p zoomy
+
+# Spikes still run standalone (validation tools)
+cargo run -p spike-live -- --rtsp "rtsp://user:pass@192.168.1.50:554/stream1"
 cargo run -p spike-detect -- --model yolov8n.onnx --image sample.jpg
 ```
-
-There are no unit tests yet. When you add real logic (decode, NMS, retention,
-storage indexing), add tests alongside it.
 
 ## Known gotchas
 
@@ -119,13 +143,16 @@ storage indexing), add tests alongside it.
 
 ## What to work on next (suggested order)
 
-1. **Validate the spikes** — get both compiling and running against a real camera /
-   image. This is Phase 0's exit criteria.
-2. **Phase 1 — core skeleton:** new `crates/core` with an Axum API + SQLite store
-   (camera registry, config), and a minimal web UI live grid driven by go2rtc.
-3. **Phase 2 — recorder:** `crates/recorder` pulling go2rtc's RTSP restream,
-   packet-copy to disk + SQLite index, retention.
-4. **Phase 3 — motion gate**, then **Phase 4 — AI detector** wrapping the
-   `spike-detect` logic into a service on motion ROIs.
+1. **Real-camera + cross-OS validation:** point the platform at real RTSP/ONVIF
+   hardware; build and validate on macOS (CoreML) and Linux (CUDA).
+2. **Live-view polish:** replace per-camera stream.html iframes with go2rtc's
+   video-stream.js (or MSE) embedded directly; add streams via go2rtc's REST API
+   instead of restarting the child on camera CRUD.
+3. **Event/recording linkage:** click an event → jump to the recording at that
+   timestamp; event-bracketed clip export.
+4. **Detection quality:** run YOLO on motion ROIs (crops) instead of full frames;
+   sub-stream support (detect on low-res, record high-res); audio in recordings.
+5. **Ops:** auth for non-LAN exposure, packaging (installer/service), CI running
+   fmt/clippy/test on the three OSes.
 
-When you start a new phase, update this file's status section.
+When you ship a meaningful chunk, update this file's status section.

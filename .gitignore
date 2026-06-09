@@ -23,7 +23,12 @@ Cargo.lock
 # Downloaded / generated test media (see spike READMEs)
 /bus.jpg
 /sample.mp4
+/driveway.mp4
 /snapshot.jpg
+
+# Web UI build artifacts
+/web/node_modules/
+/web/dist/
 
 # OS / editor cruft
 .DS_Store
