@@ -31,6 +31,7 @@ pub fn run(
     go2rtc: Arc<Go2Rtc>,
     snapshots_dir: PathBuf,
     status: StatusBoard,
+    mqtt_tx: std::sync::mpsc::Sender<crate::mqtt::EventMsg>,
     shutdown: Arc<AtomicBool>,
 ) {
     let mut detector: Option<Detector> = None;
@@ -181,6 +182,14 @@ pub fn run(
                         if !settings.webhook_url.is_empty() {
                             post_webhook(&settings.webhook_url, &cam.name, id, d, now, &snap_rel);
                         }
+                        let _ = mqtt_tx.send(crate::mqtt::EventMsg {
+                            event_id: id,
+                            camera: cam.name.clone(),
+                            label: d.label.to_string(),
+                            score: d.score,
+                            ts: now,
+                            snapshot: format!("/api/snapshots/{snap_rel}"),
+                        });
                     }
                     Err(e) => tracing::warn!("event insert failed: {e:#}"),
                 }

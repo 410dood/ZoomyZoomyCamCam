@@ -62,6 +62,8 @@ export interface Settings {
   webhook_url: string;
   record_audio: boolean;
   alert_labels: string[];
+  mqtt_url: string;
+  mqtt_prefix: string;
 }
 
 export interface CamStorage {

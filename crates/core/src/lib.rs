@@ -13,6 +13,7 @@ mod api;
 mod auth;
 mod db;
 mod go2rtc;
+mod mqtt;
 mod pipeline;
 mod ptz;
 mod record;
@@ -87,6 +88,7 @@ pub async fn run(
         let status = status_board.clone();
         move || record::run(db, go2rtc, dir, ffmpeg_bin, status, stop)
     })?;
+    let (mqtt_tx, mqtt_rx) = std::sync::mpsc::channel::<mqtt::EventMsg>();
     let det_thread = std::thread::Builder::new().name("detector".into()).spawn({
         let (db, go2rtc, dir, stop) = (
             db.clone(),
@@ -95,7 +97,11 @@ pub async fn run(
             workers_stop.clone(),
         );
         let status = status_board.clone();
-        move || pipeline::run(db, go2rtc, dir, status, stop)
+        move || pipeline::run(db, go2rtc, dir, status, mqtt_tx, stop)
+    })?;
+    let mqtt_thread = std::thread::Builder::new().name("mqtt".into()).spawn({
+        let (db, stop) = (db.clone(), workers_stop.clone());
+        move || mqtt::run(db, mqtt_rx, stop)
     })?;
 
     // go2rtc watchdog.
@@ -157,6 +163,7 @@ pub async fn run(
     let _ = tokio::task::spawn_blocking(move || {
         let _ = rec_thread.join();
         let _ = det_thread.join();
+        let _ = mqtt_thread.join();
     })
     .await;
     go2rtc.stop();

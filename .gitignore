@@ -38,3 +38,4 @@ Thumbs.db
 
 # webhook test listener output
 /webhook_log.jsonl
+/mqtt_sub.log

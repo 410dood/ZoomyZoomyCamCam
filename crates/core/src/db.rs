@@ -127,6 +127,11 @@ pub struct Settings {
     /// Labels that count as "alerts" in the review UI (Frigate-style split);
     /// everything else files under plain "detections".
     pub alert_labels: Vec<String>,
+    /// MQTT broker ("mqtt://user:pass@host:1883", "host:1883" or "host");
+    /// empty = MQTT off.
+    pub mqtt_url: String,
+    /// Topic prefix for MQTT publishes.
+    pub mqtt_prefix: String,
 }
 
 impl Default for Settings {
@@ -158,6 +163,8 @@ impl Default for Settings {
             webhook_url: String::new(),
             record_audio: false,
             alert_labels: ["person"].map(String::from).to_vec(),
+            mqtt_url: String::new(),
+            mqtt_prefix: "zoomy".into(),
         }
     }
 }

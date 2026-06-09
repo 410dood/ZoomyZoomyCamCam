@@ -171,6 +171,23 @@ export default function Settings({ onError }: { onError: (e: string) => void }) 
                 onChange={(e) => set({ webhook_url: e.target.value })}
               />
             </label>
+            <label className="field" style={{ minWidth: 240 }}>
+              MQTT broker (empty = off)
+              <input
+                type="text"
+                placeholder="mqtt://homeassistant.local:1883"
+                value={s.mqtt_url}
+                onChange={(e) => set({ mqtt_url: e.target.value })}
+              />
+            </label>
+            <label className="field">
+              MQTT topic prefix
+              <input
+                type="text"
+                value={s.mqtt_prefix}
+                onChange={(e) => set({ mqtt_prefix: e.target.value })}
+              />
+            </label>
           </div>
         </div>
 
