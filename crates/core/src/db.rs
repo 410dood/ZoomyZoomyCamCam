@@ -346,6 +346,31 @@ impl Db {
         Ok(rows)
     }
 
+    pub fn get_event(&self, id: i64) -> Result<Option<Event>> {
+        let conn = self.conn();
+        let ev = conn
+            .query_row(
+                "SELECT e.id, e.camera_id, c.name, e.ts, e.label, e.score,
+                        e.x1, e.y1, e.x2, e.y2, e.snapshot
+                 FROM events e JOIN cameras c ON c.id = e.camera_id WHERE e.id = ?1",
+                [id],
+                |r| {
+                    Ok(Event {
+                        id: r.get(0)?,
+                        camera_id: r.get(1)?,
+                        camera: r.get(2)?,
+                        ts: r.get(3)?,
+                        label: r.get(4)?,
+                        score: r.get(5)?,
+                        bbox: [r.get(6)?, r.get(7)?, r.get(8)?, r.get(9)?],
+                        snapshot: r.get(10)?,
+                    })
+                },
+            )
+            .optional()?;
+        Ok(ev)
+    }
+
     // --- segments --------------------------------------------------------
 
     pub fn upsert_segment(

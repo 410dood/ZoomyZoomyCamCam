@@ -21,6 +21,8 @@ pub struct AppState {
     pub db: Db,
     pub go2rtc: Arc<Go2Rtc>,
     pub snapshots_dir: PathBuf,
+    pub clips_dir: PathBuf,
+    pub ffmpeg_bin: Option<PathBuf>,
     pub status: StatusBoard,
 }
 
@@ -35,6 +37,7 @@ pub fn router(state: AppState) -> Router {
             get(get_camera).patch(patch_camera).delete(delete_camera),
         )
         .route("/api/events", get(list_events))
+        .route("/api/events/{id}/clip", get(event_clip))
         .route("/api/snapshots/{file}", get(snapshot))
         .route("/api/recordings", get(list_recordings))
         .route("/api/recordings/at", get(recording_at))
@@ -256,6 +259,74 @@ async fn list_events(
         q.before,
         q.limit.min(1000),
     )?))
+}
+
+#[derive(Deserialize)]
+struct ClipQuery {
+    /// Seconds of context before the event (default 5, max 30).
+    pre: Option<u32>,
+    /// Seconds after (default 10, max 60).
+    post: Option<u32>,
+}
+
+/// Export a short MP4 around an event, packet-copied out of the containing
+/// segment (no re-encode) and cached under data/clips. Frigate-style clips.
+async fn event_clip(
+    State(st): State<AppState>,
+    Path(id): Path<i64>,
+    Query(q): Query<ClipQuery>,
+    req: Request,
+) -> ApiResult<Response> {
+    let ev = st.db.get_event(id)?.ok_or_else(not_found)?;
+    let seg = st
+        .db
+        .find_segment_at(ev.camera_id, ev.ts)?
+        .ok_or_else(not_found)?;
+
+    let pre = q.pre.unwrap_or(5).min(30);
+    let post = q.post.unwrap_or(10).min(60);
+    // Clamp to the containing segment (v1: clips do not span segments).
+    let offset = (ev.ts - seg.start_ts - i64::from(pre)).max(0);
+    let duration = pre + post;
+
+    let clip_name = format!("event-{id}-{pre}-{post}.mp4");
+    let clip_path = st.clips_dir.join(&clip_name);
+    if !clip_path.exists() {
+        std::fs::create_dir_all(&st.clips_dir).ok();
+        let ffmpeg = recorder::locate_ffmpeg(st.ffmpeg_bin.as_deref())?;
+        let seg_path = seg.path.clone();
+        let out = clip_path.clone();
+        let status = tokio::task::spawn_blocking(move || {
+            std::process::Command::new(ffmpeg)
+                .args(["-loglevel", "error", "-ss", &offset.to_string(), "-i"])
+                .arg(&seg_path)
+                .args(["-t", &duration.to_string(), "-c", "copy"])
+                .args(["-movflags", "+faststart", "-y"])
+                .arg(&out)
+                .status()
+        })
+        .await
+        .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        if !status.success() {
+            return Err(ApiError(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "clip extraction failed".into(),
+            ));
+        }
+    }
+
+    let mut resp = ServeFile::new(clip_path).oneshot(req).await.into_response();
+    resp.headers_mut().insert(
+        axum::http::header::CONTENT_DISPOSITION,
+        format!(
+            "attachment; filename=\"{}-{}-{}.mp4\"",
+            ev.camera, ev.label, ev.ts
+        )
+        .parse()
+        .expect("valid header"),
+    );
+    Ok(resp)
 }
 
 async fn snapshot(

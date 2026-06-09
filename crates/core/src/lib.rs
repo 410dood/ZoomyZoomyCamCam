@@ -118,6 +118,8 @@ pub async fn run(
         db: db.clone(),
         go2rtc: go2rtc.clone(),
         snapshots_dir,
+        clips_dir: cfg.data_dir.join("clips"),
+        ffmpeg_bin: cfg.ffmpeg_bin.clone(),
         status: status_board,
     };
     let ui =

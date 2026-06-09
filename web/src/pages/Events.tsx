@@ -80,16 +80,25 @@ export default function Events({ cameras }: { cameras: Camera[] }) {
               <div className="meta">
                 <b>{ev.label}</b> {(ev.score * 100).toFixed(0)}% · {ev.camera}
                 <div className="muted">{fmtTime(ev.ts)}</div>
-                <button
-                  className="ghost"
-                  style={{ marginTop: 8 }}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    jumpToRecording(ev);
-                  }}
-                >
-                  {noClip === ev.id ? "no recording for this moment" : "▶ view recording"}
-                </button>
+                <div className="row" style={{ marginTop: 8 }}>
+                  <button
+                    className="ghost"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      jumpToRecording(ev);
+                    }}
+                  >
+                    {noClip === ev.id ? "no recording" : "▶ view recording"}
+                  </button>
+                  <a
+                    className="ghost"
+                    style={{ padding: "8px 12px", borderRadius: 8, border: "1px solid var(--border)", textDecoration: "none", color: "var(--text)", fontSize: "0.9rem" }}
+                    href={`/api/events/${ev.id}/clip`}
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    ⬇ clip
+                  </a>
+                </div>
               </div>
             </div>
           ))}
