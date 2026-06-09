@@ -48,6 +48,12 @@ Prerequisites:
   [Hugging Face](https://huggingface.co/immich-app/buffalo_l): save
   `detection/model.onnx` as `./det_10g.onnx` and `recognition/model.onnx` as
   `./w600k_r50.onnx`. Face recognition silently stays off without them.
+- *(Optional, for license plate recognition)* save
+  [onnx-community/yolos-small-finetuned-license-plate-detection-ONNX](https://huggingface.co/onnx-community/yolos-small-finetuned-license-plate-detection-ONNX)
+  `onnx/model_quantized.onnx` as `./plate_det.onnx`, and from
+  [monkt/paddleocr-onnx](https://huggingface.co/monkt/paddleocr-onnx)
+  `languages/english/rec.onnx` as `./plate_rec.onnx` plus
+  `languages/english/dict.txt` as `./plate_dict.txt`.
 - *(Optional, for natural-language smart search)* CLIP from
   [Xenova/clip-vit-base-patch32](https://huggingface.co/Xenova/clip-vit-base-patch32):
   save `onnx/vision_model_quantized.onnx` as `./clip_vision.onnx`,

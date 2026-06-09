@@ -150,6 +150,7 @@ export default function Events({ cameras }: { cameras: Camera[] }) {
               <div className="meta">
                 <b>{ev.label}</b> {(ev.score * 100).toFixed(0)}% · {ev.camera}
                 {ev.face && <span style={{ color: "var(--ok)" }}> · 👤 {ev.face}</span>}
+                {ev.plate && <span style={{ color: "var(--warn)" }}> · 🚗 {ev.plate}</span>}
                 <div className="muted">{fmtTime(ev.ts)}</div>
                 <div className="row" style={{ marginTop: 8 }}>
                   <button

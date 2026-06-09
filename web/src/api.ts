@@ -36,6 +36,7 @@ export interface CamEvent {
   box: [number, number, number, number];
   snapshot: string | null;
   face: string | null;
+  plate: string | null;
 }
 
 export interface Segment {

@@ -23,7 +23,15 @@
       "../../web/dist": "web/dist",
       "../../bin/go2rtc.exe": "bin/go2rtc.exe",
       "../../bin/ffmpeg.exe": "bin/ffmpeg.exe",
-      "../../yolov8n.onnx": "yolov8n.onnx"
+      "../../yolov8n.onnx": "yolov8n.onnx",
+      "../../det_10g.onnx": "det_10g.onnx",
+      "../../w600k_r50.onnx": "w600k_r50.onnx",
+      "../../clip_vision.onnx": "clip_vision.onnx",
+      "../../clip_text.onnx": "clip_text.onnx",
+      "../../clip_tokenizer.json": "clip_tokenizer.json",
+      "../../plate_det.onnx": "plate_det.onnx",
+      "../../plate_rec.onnx": "plate_rec.onnx",
+      "../../plate_dict.txt": "plate_dict.txt"
     }
   }
 }

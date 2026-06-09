@@ -80,6 +80,9 @@ pub struct Event {
     /// Recognized identity (face recognition), when the detection is a person
     /// whose face matched an enrolled embedding.
     pub face: Option<String>,
+    /// License plate text (LPR), when the detection is a vehicle with a
+    /// readable plate.
+    pub plate: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -239,6 +242,7 @@ impl Db {
         let _ = conn.execute("ALTER TABLE cameras ADD COLUMN detect_json TEXT", []);
         let _ = conn.execute("ALTER TABLE cameras ADD COLUMN detect_source TEXT", []);
         let _ = conn.execute("ALTER TABLE events ADD COLUMN face TEXT", []);
+        let _ = conn.execute("ALTER TABLE events ADD COLUMN plate TEXT", []);
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS faces (
                  id         INTEGER PRIMARY KEY,
@@ -351,13 +355,15 @@ impl Db {
         bbox: [f32; 4],
         snapshot: Option<&str>,
         face: Option<&str>,
+        plate: Option<&str>,
     ) -> Result<i64> {
         let conn = self.conn();
         conn.execute(
-            "INSERT INTO events (camera_id, ts, label, score, x1, y1, x2, y2, snapshot, face)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            "INSERT INTO events (camera_id, ts, label, score, x1, y1, x2, y2, snapshot, face, plate)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             params![
-                camera_id, ts, label, score, bbox[0], bbox[1], bbox[2], bbox[3], snapshot, face
+                camera_id, ts, label, score, bbox[0], bbox[1], bbox[2], bbox[3], snapshot, face,
+                plate
             ],
         )?;
         Ok(conn.last_insert_rowid())
@@ -373,7 +379,7 @@ impl Db {
         let conn = self.conn();
         let mut stmt = conn.prepare(
             "SELECT e.id, e.camera_id, c.name, e.ts, e.label, e.score,
-                    e.x1, e.y1, e.x2, e.y2, e.snapshot, e.face
+                    e.x1, e.y1, e.x2, e.y2, e.snapshot, e.face, e.plate
              FROM events e JOIN cameras c ON c.id = e.camera_id
              WHERE (?1 IS NULL OR e.camera_id = ?1)
                AND (?2 IS NULL OR e.label = ?2)
@@ -392,6 +398,7 @@ impl Db {
                     bbox: [r.get(6)?, r.get(7)?, r.get(8)?, r.get(9)?],
                     snapshot: r.get(10)?,
                     face: r.get(11)?,
+                    plate: r.get(12)?,
                 })
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -403,7 +410,7 @@ impl Db {
         let ev = conn
             .query_row(
                 "SELECT e.id, e.camera_id, c.name, e.ts, e.label, e.score,
-                        e.x1, e.y1, e.x2, e.y2, e.snapshot, e.face
+                        e.x1, e.y1, e.x2, e.y2, e.snapshot, e.face, e.plate
                  FROM events e JOIN cameras c ON c.id = e.camera_id WHERE e.id = ?1",
                 [id],
                 |r| {
@@ -417,6 +424,7 @@ impl Db {
                         bbox: [r.get(6)?, r.get(7)?, r.get(8)?, r.get(9)?],
                         snapshot: r.get(10)?,
                         face: r.get(11)?,
+                        plate: r.get(12)?,
                     })
                 },
             )
@@ -707,9 +715,18 @@ mod tests {
         let cam = db
             .add_camera("porch", "rtsp://x", None, true, true)
             .unwrap();
-        db.add_event(cam.id, 100, "person", 0.9, [1.0, 2.0, 3.0, 4.0], None, None)
-            .unwrap();
-        db.add_event(cam.id, 200, "car", 0.8, [0.0; 4], None, None)
+        db.add_event(
+            cam.id,
+            100,
+            "person",
+            0.9,
+            [1.0, 2.0, 3.0, 4.0],
+            None,
+            None,
+            None,
+        )
+        .unwrap();
+        db.add_event(cam.id, 200, "car", 0.8, [0.0; 4], None, None, None)
             .unwrap();
 
         assert_eq!(db.list_events(None, None, None, 10).unwrap().len(), 2);

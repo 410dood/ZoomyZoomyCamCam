@@ -13,6 +13,7 @@ mod api;
 mod auth;
 mod db;
 mod go2rtc;
+pub mod lpr;
 mod mqtt;
 mod pipeline;
 mod ptz;

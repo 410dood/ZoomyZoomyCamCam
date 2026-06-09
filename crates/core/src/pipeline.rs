@@ -39,6 +39,7 @@ pub fn run(
     let mut face_engine: Option<facerec::FaceEngine> = None;
     let mut face_key = String::new();
     let mut clip: Option<crate::smart::ImageEmbedder> = None;
+    let mut lpr: Option<crate::lpr::PlateEngine> = None;
     // Throttle unknown-face crops: one per camera per 30s, or enrollment
     // would drown in near-duplicates.
     let mut last_unknown_save: HashMap<i64, i64> = HashMap::new();
@@ -210,6 +211,70 @@ pub fn run(
                 }
             }
 
+            // --- license plate recognition on vehicle detections ----------
+            let mut plates: Vec<Option<String>> = vec![None; wanted.len()];
+            const VEHICLES: [&str; 4] = ["car", "truck", "bus", "motorcycle"];
+            if crate::lpr::models_present() && wanted.iter().any(|d| VEHICLES.contains(&d.label)) {
+                if lpr.is_none() {
+                    match crate::lpr::PlateEngine::try_new() {
+                        Ok(e) => {
+                            tracing::info!("license plate recognition ready");
+                            lpr = Some(e);
+                        }
+                        Err(e) => tracing::warn!("LPR unavailable: {e:#}"),
+                    }
+                }
+                if let Some(engine) = lpr.as_mut() {
+                    // Plates need pixels: when detecting on a low-res
+                    // sub-stream, OCR the matching full-res frame instead.
+                    let hires = if cam.detect_source.is_some() {
+                        fetch_frame(&go2rtc.api_base(), &cam.name).ok()
+                    } else {
+                        None
+                    };
+                    let src = hires.as_ref().unwrap_or(&frame);
+                    let (sx, sy) = (
+                        src.width() as f32 / frame.width() as f32,
+                        src.height() as f32 / frame.height() as f32,
+                    );
+                    // Full-frame plate pass, shared as a fallback: small
+                    // vehicle crops can starve the detector of context.
+                    let frame_plate = engine.detect(src, 0.5).ok().flatten();
+                    for (i, d) in wanted.iter().enumerate() {
+                        if !VEHICLES.contains(&d.label) {
+                            continue;
+                        }
+                        let x = (d.x1 * sx).max(0.0) as u32;
+                        let y = (d.y1 * sy).max(0.0) as u32;
+                        let w = (((d.x2 - d.x1) * sx) as u32).min(src.width() - x);
+                        let h = (((d.y2 - d.y1) * sy) as u32).min(src.height() - y);
+                        if w < 48 || h < 48 {
+                            continue;
+                        }
+                        let vehicle = src.crop_imm(x, y, w, h);
+                        let read = match engine.detect(&vehicle, 0.5) {
+                            Ok(Some(p)) => engine.read(&vehicle, &p).ok(),
+                            _ => None,
+                        };
+                        // Fallback: a full-frame plate whose center lies in
+                        // this vehicle's box.
+                        let read = read.or_else(|| {
+                            frame_plate.as_ref().and_then(|p| {
+                                let (pcx, pcy) = ((p.x1 + p.x2) / 2.0, (p.y1 + p.y2) / 2.0);
+                                let inside = pcx >= d.x1 * sx
+                                    && pcx <= d.x2 * sx
+                                    && pcy >= d.y1 * sy
+                                    && pcy <= d.y2 * sy;
+                                inside.then(|| engine.read(src, p).ok()).flatten()
+                            })
+                        });
+                        if let Some(text) = read.filter(|t| t.len() >= 3) {
+                            plates[i] = Some(text);
+                        }
+                    }
+                }
+            }
+
             let mut new_event_ids: Vec<i64> = Vec::new();
             for (i, d) in wanted.iter().enumerate() {
                 last_event.insert((cam.id, d.label), now);
@@ -221,6 +286,7 @@ pub fn run(
                     [d.x1, d.y1, d.x2, d.y2],
                     Some(&snap_rel),
                     face_names[i].as_deref(),
+                    plates[i].as_deref(),
                 ) {
                     Ok(id) => {
                         tracing::info!(
@@ -228,6 +294,7 @@ pub fn run(
                             label = d.label,
                             score = format!("{:.0}%", d.score * 100.0),
                             face = face_names[i].as_deref().unwrap_or("-"),
+                            plate = plates[i].as_deref().unwrap_or("-"),
                             event = id,
                             "event recorded"
                         );
