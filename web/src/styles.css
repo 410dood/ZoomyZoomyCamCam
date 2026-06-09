@@ -197,6 +197,52 @@ button.danger:hover { background: #3d1d1f; }
 }
 .modal-bg img, .modal-bg video { max-width: 92vw; max-height: 88vh; border-radius: 8px; }
 
+/* --- timeline scrubber ---------------------------------------------------- */
+.timeline {
+  position: relative;
+  height: 56px;
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  cursor: crosshair;
+  overflow: hidden;
+  margin-bottom: 14px;
+}
+.tl-grid {
+  position: absolute;
+  top: 0;
+  bottom: 16px;
+  width: 1px;
+  background: var(--border);
+}
+.tl-block {
+  position: absolute;
+  top: 8px;
+  height: 26px;
+  background: var(--accent-2);
+  opacity: 0.55;
+  border-radius: 2px;
+}
+.tl-tick {
+  position: absolute;
+  top: 4px;
+  width: 3px;
+  height: 34px;
+  background: var(--danger);
+  border-radius: 1px;
+}
+.tl-times {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 2px;
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.7rem;
+  color: var(--muted);
+  pointer-events: none;
+}
+
 .usage-bar {
   flex: 1;
   height: 10px;

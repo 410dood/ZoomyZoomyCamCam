@@ -1,19 +1,36 @@
 import { useEffect, useState } from "react";
-import { api, Camera, fmtBytes, fmtTime, Segment, Stats } from "../api";
+import { api, CamEvent, Camera, fmtBytes, fmtTime, Segment, Stats } from "../api";
+import Timeline from "../Timeline";
+
+const WINDOWS = [
+  { label: "1h", secs: 3600 },
+  { label: "6h", secs: 6 * 3600 },
+  { label: "24h", secs: 24 * 3600 },
+];
 
 export default function Recordings({ cameras }: { cameras: Camera[] }) {
   const [segments, setSegments] = useState<Segment[]>([]);
+  const [events, setEvents] = useState<CamEvent[]>([]);
   const [cameraId, setCameraId] = useState<number | "">("");
-  const [playing, setPlaying] = useState<Segment | null>(null);
+  const [playing, setPlaying] = useState<{ segment: Segment; offset: number } | null>(null);
   const [stats, setStats] = useState<Stats | null>(null);
+  const [windowSecs, setWindowSecs] = useState(6 * 3600);
+  const [segmentSecs, setSegmentSecs] = useState(60);
 
   const load = () => {
     api
-      .recordings({ camera_id: cameraId === "" ? undefined : cameraId, limit: 200 })
+      .recordings({ camera_id: cameraId === "" ? undefined : cameraId, limit: 1000 })
       .then(setSegments)
       .catch(() => {});
     api.stats().then(setStats).catch(() => {});
+    if (cameraId !== "") {
+      api.events({ camera_id: cameraId, limit: 1000 }).then(setEvents).catch(() => {});
+    }
   };
+
+  useEffect(() => {
+    api.settings().then((s) => setSegmentSecs(s.segment_seconds)).catch(() => {});
+  }, []);
 
   useEffect(() => {
     load();
@@ -21,6 +38,16 @@ export default function Recordings({ cameras }: { cameras: Camera[] }) {
     return () => clearInterval(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cameraId]);
+
+  const seekTo = async (ts: number) => {
+    if (cameraId === "") return;
+    try {
+      const r = await api.recordingAt(cameraId, ts);
+      setPlaying({ segment: r.segment, offset: r.offset_secs });
+    } catch {
+      /* clicked a gap — nothing recorded there */
+    }
+  };
 
   return (
     <>
@@ -66,10 +93,30 @@ export default function Recordings({ cameras }: { cameras: Camera[] }) {
             </option>
           ))}
         </select>
+        {cameraId !== "" &&
+          WINDOWS.map((w) => (
+            <button
+              key={w.secs}
+              className={windowSecs === w.secs ? "primary" : "ghost"}
+              onClick={() => setWindowSecs(w.secs)}
+            >
+              {w.label}
+            </button>
+          ))}
         <span className="muted">
           {segments.length} segments · {fmtBytes(segments.reduce((a, s) => a + s.bytes, 0))} total
         </span>
       </div>
+
+      {cameraId !== "" && (
+        <Timeline
+          windowSecs={windowSecs}
+          segmentSecs={segmentSecs}
+          segments={segments}
+          events={events}
+          onSeek={seekTo}
+        />
+      )}
 
       {segments.length === 0 ? (
         <div className="empty">
@@ -87,7 +134,7 @@ export default function Recordings({ cameras }: { cameras: Camera[] }) {
               </tr>
             </thead>
             <tbody>
-              {segments.map((s) => (
+              {segments.slice(0, 200).map((s) => (
                 <tr key={s.id}>
                   <td>
                     <b>{s.camera}</b>
@@ -95,7 +142,7 @@ export default function Recordings({ cameras }: { cameras: Camera[] }) {
                   <td>{fmtTime(s.start_ts)}</td>
                   <td className="muted">{fmtBytes(s.bytes)}</td>
                   <td>
-                    <button className="ghost" onClick={() => setPlaying(s)}>
+                    <button className="ghost" onClick={() => setPlaying({ segment: s, offset: 0 })}>
                       ▶ Play
                     </button>
                   </td>
@@ -109,10 +156,17 @@ export default function Recordings({ cameras }: { cameras: Camera[] }) {
       {playing && (
         <div className="modal-bg" onClick={() => setPlaying(null)}>
           <video
-            src={`/api/recordings/${playing.id}/video`}
+            src={`/api/recordings/${playing.segment.id}/video`}
             controls
             autoPlay
             onClick={(e) => e.stopPropagation()}
+            onLoadedMetadata={(e) => {
+              const v = e.currentTarget;
+              // Clamp: clicking near "now" can resolve into the last closed
+              // segment with an offset past its end.
+              if (playing.offset > 0)
+                v.currentTime = Math.min(playing.offset, Math.max(0, v.duration - 2));
+            }}
           />
         </div>
       )}
