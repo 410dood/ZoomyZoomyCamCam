@@ -1,4 +1,4 @@
-# Competitor feature matrix & adoption backlog
+﻿# Competitor feature matrix & adoption backlog
 
 *Surveyed June 2026. Complements `01-research-and-architecture.md` (field survey);
 this doc drives the post-v0.1 feature backlog: what the incumbents do best and
@@ -20,14 +20,14 @@ which of those features we adopt, in what order.*
 |---|---|---|---|
 | 1 | Close-to-tray desktop NVR semantics | Blue Iris service mode | ✅ shipped |
 | 2 | Bundled ffmpeg/go2rtc/model in installer | Blue Iris all-in-one install | ✅ shipped |
-| 3 | Event → recording playback at timestamp | UniFi timeline, Frigate review | next |
-| 4 | Camera health (online/offline, last frame, fps) | UniFi status surface, BI watchdog | next |
-| 5 | Per-camera detect config: labels, thresholds, ignore zones | Frigate zones/masks, BI per-camera profiles | next |
-| 6 | Webhook on event (alarm-server style) | Blue Iris alarm server, Frigate MQTT | next |
-| 7 | Audio in recordings (AAC) | Blue Iris | next |
-| 8 | Storage dashboard (per-camera usage, est. days left) | UniFi | next |
-| 9 | Sub-stream detect role (decode low-res, record 4K) | Frigate detect role, BI dual-streaming | planned |
-| 10 | Timeline scrubber UI across segments + event markers | UniFi Protect | planned |
+| 3 | Event → recording playback at timestamp | UniFi timeline, Frigate review | ✅ shipped |
+| 4 | Camera health (online/offline, last frame, fps) | UniFi status surface, BI watchdog | ✅ shipped |
+| 5 | Per-camera detect config: labels, thresholds, ignore zones | Frigate zones/masks, BI per-camera profiles | ✅ shipped |
+| 6 | Webhook on event (alarm-server style) | Blue Iris alarm server, Frigate MQTT | ✅ shipped |
+| 7 | Audio in recordings (AAC) | Blue Iris | ✅ shipped |
+| 8 | Storage dashboard (per-camera usage, est. days left) | UniFi | ✅ shipped |
+| 9 | Sub-stream detect role (decode low-res, record 4K) | Frigate detect role, BI dual-streaming | ✅ shipped (validated on real Dahua 4K) |
+| 10 | Timeline scrubber UI across segments + event markers | UniFi Protect | ✅ shipped |
 | 11 | Review split: alerts (person/car in zone) vs detections | Frigate 0.14 | planned |
 | 12 | Event clips (pre/post-roll MP4 export) | Frigate clips, BI export | planned |
 | 13 | ONVIF discovery + PTZ | Blue Iris, Frigate 0.16 | planned (needs PTZ hardware to validate) |

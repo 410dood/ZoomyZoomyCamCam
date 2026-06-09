@@ -14,7 +14,18 @@ The differentiator: Blue Iris is Windows-only; Frigate needs Linux/Docker plus
 Coral/Nvidia. We combine **Moonfire-class efficient recording** with **portable
 GPU-accelerated AI** so the same model runs on Apple Silicon and any DirectX 12 GPU.
 
-## Current status: v0.1 vertical slice — Phases 1-4 working on Windows, 2026-06-09
+## Current status: v0.2 — desktop app + competitor-parity features, 2026-06-09
+
+On top of the v0.1 slice below: Tauri desktop app (close-to-tray keeps recording,
+NSIS installer bundling go2rtc/ffmpeg/model/UI), validated against a **real Dahua
+4K camera** (RTSP main + subtype=1 sub-stream). Competitor-driven features shipped
+(see docs/02 matrix): event→recording jump, per-camera health status, per-camera
+detect tuning + ignore zones, webhook notifications, AAC audio recording,
+storage stats, sub-stream detect role, timeline scrubber with event ticks.
+Remaining on the matrix: review split, event clip export, ONVIF/PTZ, face/LPR,
+MQTT, auth.
+
+## v0.1 baseline: Phases 1-4 working on Windows, 2026-06-09
 
 The platform runs end-to-end behind one binary (`cargo run -p zoomy`) + web UI:
 
