@@ -14,16 +14,18 @@ The differentiator: Blue Iris is Windows-only; Frigate needs Linux/Docker plus
 Coral/Nvidia. We combine **Moonfire-class efficient recording** with **portable
 GPU-accelerated AI** so the same model runs on Apple Silicon and any DirectX 12 GPU.
 
-## Current status: v0.2 — desktop app + competitor-parity features, 2026-06-09
+## Current status: v0.3 — competitor matrix 15/16 shipped, 2026-06-09
 
 On top of the v0.1 slice below: Tauri desktop app (close-to-tray keeps recording,
-NSIS installer bundling go2rtc/ffmpeg/model/UI), validated against a **real Dahua
-4K camera** (RTSP main + subtype=1 sub-stream). Competitor-driven features shipped
-(see docs/02 matrix): event→recording jump, per-camera health status, per-camera
-detect tuning + ignore zones, webhook notifications, AAC audio recording,
-storage stats, sub-stream detect role, timeline scrubber with event ticks.
-Remaining on the matrix: review split, event clip export, ONVIF/PTZ, face/LPR,
-MQTT, auth.
+NSIS installer bundling go2rtc/ffmpeg/model/UI), validated against **real hardware**
+(Dahua 4K fixed cam + Amcrest IP2M-866EW pan/tilt). Shipped from the docs/02
+matrix: event→recording jump, camera health, per-camera detect tuning + ignore
+zones, webhooks, AAC audio, storage stats, sub-stream detect role, timeline
+scrubber, event clip export, review split (alerts/detections), ONVIF resolve
+(IP+creds → stream URLs) and **ONVIF PTZ** (hold-to-move pad, physically validated),
+remote-access auth (loopback exempt), and MQTT (events + availability, verified
+against a local broker). CI workflow covers fmt/clippy/test on the three OSes +
+web build. The only unshipped matrix item is **face recognition / LPR** (#14).
 
 ## v0.1 baseline: Phases 1-4 working on Windows, 2026-06-09
 
