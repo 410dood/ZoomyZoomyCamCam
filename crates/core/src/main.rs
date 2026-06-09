@@ -1,26 +1,12 @@
-//! zoomy — the ZoomyZoomyCamCam core service.
-//!
-//! One binary that:
-//!   - serves the web UI and JSON API (Axum)
-//!   - owns the camera registry / events / recordings index (SQLite)
-//!   - supervises go2rtc (ingest + WebRTC) as a child process
-//!   - runs continuous packet-copy recording with retention (ffmpeg)
-//!   - runs the motion-gated AI detection pipeline (ONNX Runtime)
+//! zoomy CLI — thin wrapper over the `zoomy` library (see lib.rs). The Tauri
+//! desktop app embeds the same library; this binary is the headless/server way
+//! to run the platform.
 
-mod api;
-mod db;
-mod go2rtc;
-mod pipeline;
-mod record;
-
-use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::Parser;
-use tower_http::services::{ServeDir, ServeFile};
+use zoomy::ServerConfig;
 
 #[derive(Parser, Debug)]
 #[command(name = "zoomy", version, about)]
@@ -52,96 +38,27 @@ async fn main() -> Result<()> {
         .init();
     let args = Args::parse();
 
-    let db = db::Db::open(&args.data_dir.join("zoomy.db")).context("opening database")?;
-    let settings = db.settings();
-    db.save_settings(&settings)?; // persist defaults on first run
-
-    let go2rtc = Arc::new(go2rtc::Go2Rtc::new(
-        args.go2rtc_bin.as_deref(),
-        args.data_dir.join("go2rtc.yaml"),
-        settings.go2rtc_api_port,
-    )?);
-    go2rtc.restart_with(&db).context("starting go2rtc")?;
-
-    let shutdown = Arc::new(AtomicBool::new(false));
-    let snapshots_dir = args.data_dir.join("snapshots");
-    let recordings_dir = args.data_dir.join("recordings");
-
-    // Recording manager + detection pipeline run on their own threads (both
-    // drive blocking child processes / inference).
-    let rec_thread = std::thread::Builder::new().name("recorder".into()).spawn({
-        let (db, go2rtc, dir, stop) = (
-            db.clone(),
-            go2rtc.clone(),
-            recordings_dir.clone(),
-            shutdown.clone(),
-        );
-        move || record::run(db, go2rtc, dir, stop)
-    })?;
-    let det_thread = std::thread::Builder::new().name("detector".into()).spawn({
-        let (db, go2rtc, dir, stop) = (
-            db.clone(),
-            go2rtc.clone(),
-            snapshots_dir.clone(),
-            shutdown.clone(),
-        );
-        move || pipeline::run(db, go2rtc, dir, stop)
-    })?;
-
-    // go2rtc watchdog.
-    tokio::spawn({
-        let (db, go2rtc, stop) = (db.clone(), go2rtc.clone(), shutdown.clone());
-        async move {
-            let mut tick = tokio::time::interval(std::time::Duration::from_secs(5));
-            loop {
-                tick.tick().await;
-                if stop.load(Ordering::Relaxed) {
-                    break;
-                }
-                if let Err(e) = go2rtc.ensure_alive(&db) {
-                    tracing::warn!("go2rtc watchdog: {e:#}");
-                }
-            }
-        }
-    });
-
-    // API + static web UI (SPA fallback to index.html).
-    let state = api::AppState {
-        db: db.clone(),
-        go2rtc: go2rtc.clone(),
-        snapshots_dir,
-    };
-    let ui = ServeDir::new(&args.ui_dir)
-        .not_found_service(ServeFile::new(args.ui_dir.join("index.html")));
-    let app = api::router(state).fallback_service(ui);
-
-    let addr = SocketAddr::from(([0, 0, 0, 0], args.port));
-    let listener = tokio::net::TcpListener::bind(addr)
-        .await
-        .with_context(|| format!("binding {addr}"))?;
-
     println!();
-    println!("  ZoomyZoomyCamCam is running");
+    println!("  ZoomyZoomyCamCam is starting");
     println!("      Web UI:   http://localhost:{}/", args.port);
     println!("      API:      http://localhost:{}/api/health", args.port);
-    println!("      go2rtc:   {}/", go2rtc.api_base());
     println!("  Press Ctrl+C to stop.");
     println!();
 
-    axum::serve(listener, app)
-        .with_graceful_shutdown(async {
-            let _ = tokio::signal::ctrl_c().await;
-            tracing::info!("shutting down");
-        })
-        .await?;
+    let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+    tokio::spawn(async move {
+        let _ = tokio::signal::ctrl_c().await;
+        let _ = shutdown_tx.send(true);
+    });
 
-    // Orderly teardown: stop workers (they finalize ffmpeg segments), then go2rtc.
-    shutdown.store(true, Ordering::Relaxed);
-    let _ = tokio::task::spawn_blocking(move || {
-        let _ = rec_thread.join();
-        let _ = det_thread.join();
-    })
-    .await;
-    go2rtc.stop();
-    Ok(())
+    zoomy::run(
+        ServerConfig {
+            port: args.port,
+            data_dir: args.data_dir,
+            ui_dir: args.ui_dir,
+            go2rtc_bin: args.go2rtc_bin,
+        },
+        shutdown_rx,
+    )
+    .await
 }

@@ -51,9 +51,21 @@ Build and run:
 # one-time: build the web UI
 cd web && npm install && npm run build && cd ..
 
-# run the platform (API + UI on :8080, go2rtc on :1984/:8554/:8555)
+# Desktop app (native window; engine embedded, UI on :18080)
+cargo run -p zoomy-desktop
+
+# ...or headless server mode (API + UI on :8080) for a NAS / home server
 cargo run -p zoomy
+
+# Windows installer (NSIS): produces target/release/bundle/nsis/*-setup.exe
+# with the web UI, go2rtc and the model bundled inside
+cd crates/desktop && npx @tauri-apps/cli build
 ```
+
+Both modes run the identical engine and share nothing but the codebase: the
+desktop app keeps its data in the per-user app-data dir when installed, while
+server mode uses `./data`. (In dev, `cargo run -p zoomy-desktop` deliberately
+shares the workspace `./data` so your cameras carry over.)
 
 Open **http://localhost:8080**, go to *Cameras*, and add your camera's RTSP URL
 (any go2rtc source string works — `rtsp://`, `ffmpeg:`, `exec:`, ONVIF, …). You get:
@@ -76,7 +88,8 @@ ZoomyZoomyCamCam/
 ├── config/                   # example go2rtc config
 ├── web/                      # React + TypeScript UI (Vite)
 └── crates/
-    ├── core/                 # `zoomy` binary: API + SQLite + supervisors
+    ├── core/                 # zoomy library + CLI: API + SQLite + supervisors
+    ├── desktop/              # Tauri 2 desktop app (embeds the zoomy library)
     ├── detector/             # YOLOv8 via ONNX Runtime, per-OS GPU EP
     ├── motion/               # cheap pixel-diff motion gate
     ├── recorder/             # ffmpeg packet-copy segments + retention

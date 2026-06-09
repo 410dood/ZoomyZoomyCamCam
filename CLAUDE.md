@@ -21,10 +21,16 @@ The platform runs end-to-end behind one binary (`cargo run -p zoomy`) + web UI:
 - **Phase 0 (spikes):** validated 2026-06-09 — DirectML EP active, 8.7 ms GPU vs
   39.2 ms CPU on bus.jpg; WebRTC playback verified in Chrome. Spike crates are kept
   as standalone validation tools.
-- **Phase 1 (core):** `crates/core` (`zoomy` bin) — Axum API + SQLite (cameras,
-  events, segments, settings JSON blob), go2rtc supervised as a child with config
-  generated from the registry + watchdog, React/TS web UI in `web/` (live grid via
-  go2rtc stream.html iframes, events, recordings, cameras, settings).
+- **Phase 1 (core):** `crates/core` — a library (`zoomy::run(ServerConfig,
+  shutdown_rx)`) plus a thin CLI bin. Axum API + SQLite (cameras, events, segments,
+  settings JSON blob), go2rtc supervised as a child with config generated from the
+  registry + watchdog, React/TS web UI in `web/` (live grid via go2rtc stream.html
+  iframes, events, recordings, cameras, settings).
+- **Desktop app:** `crates/desktop` — Tauri 2 shell embedding the zoomy library
+  in-process on port 18080; native window onto the same UI; NSIS installer via
+  `npx @tauri-apps/cli build` (bundles web/dist, go2rtc.exe, yolov8n.onnx as
+  resources; data goes to the per-user app-data dir). Debug builds deliberately
+  use the workspace checkout (shared `data/`) — see comment in `resolve_config`.
 - **Phase 2 (recorder):** `crates/recorder` — ffmpeg `-c copy -f segment` per camera
   off go2rtc's RTSP restream, strftime-named 60 s MP4 segments (faststart), SQLite
   index, retention by age + total bytes. Reconciliation loop self-heals dead ffmpeg.
@@ -80,7 +86,8 @@ ZoomyZoomyCamCam/
 ├── config/go2rtc.example.yaml             # reference multi-camera config
 ├── web/                       # React + TypeScript UI (Vite); build -> web/dist
 └── crates/
-    ├── core/          # `zoomy` binary: Axum API + SQLite + supervisors + pipeline
+    ├── core/          # zoomy lib (+ CLI bin): Axum API + SQLite + supervisors + pipeline
+    ├── desktop/       # Tauri 2 desktop app embedding the zoomy lib (port 18080)
     ├── detector/      # lib: YOLOv8 via ONNX Runtime, per-OS GPU EP
     ├── motion/        # lib: pixel-diff motion gate
     ├── recorder/      # lib: ffmpeg packet-copy segments + retention
@@ -107,9 +114,15 @@ cargo fmt --all
 # Web UI (one-time, or after changing web/)
 cd web && npm install && npm run build
 
-# Run the platform: http://localhost:8080 (needs bin/go2rtc.exe, ffmpeg on PATH,
-# yolov8n.onnx in repo root — see README prerequisites)
+# Run the platform headless: http://localhost:8080 (needs bin/go2rtc.exe,
+# ffmpeg on PATH, yolov8n.onnx in repo root — see README prerequisites)
 cargo run -p zoomy
+
+# Run the desktop app (same engine, native window, port 18080)
+cargo run -p zoomy-desktop
+
+# Build the Windows installer (target/release/bundle/nsis/*.exe)
+cd crates/desktop && npx @tauri-apps/cli build
 
 # Spikes still run standalone (validation tools)
 cargo run -p spike-live -- --rtsp "rtsp://user:pass@192.168.1.50:554/stream1"

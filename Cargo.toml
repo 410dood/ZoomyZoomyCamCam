@@ -17,6 +17,7 @@ members = [
     "crates/motion",
     "crates/recorder",
     "crates/core",
+    "crates/desktop",
 ]
 
 # Shared dependency versions live here so every crate stays in lockstep.
