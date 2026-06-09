@@ -1,0 +1,32 @@
+# Rust
+/target
+**/target
+# keep unlocked for a multi-binary workspace during early dev
+Cargo.lock
+
+# Bundled third-party binaries (downloaded by scripts, not committed)
+/bin/go2rtc
+/bin/go2rtc.exe
+/bin/ffmpeg
+/bin/ffmpeg.exe
+
+# Model weights (downloaded, not committed)
+*.onnx
+*.pt
+
+# Generated runtime config / recordings / scratch
+/config/go2rtc.generated.yaml
+/recordings/
+/data/
+*.log
+
+# Downloaded / generated test media (see spike READMEs)
+/bus.jpg
+/sample.mp4
+/snapshot.jpg
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

@@ -1,0 +1,33 @@
+# ZoomyZoomyCamCam — Cargo workspace
+# Self-hosted, cross-platform home surveillance platform.
+#
+# The workspace groups independent crates. Phase 0 ships two "spikes" that
+# de-risk the two hardest parts of the project before we build the real core:
+#   - spike-live   : camera ingest -> WebRTC live view (via go2rtc)
+#   - spike-detect : YOLO object detection via ONNX Runtime, GPU per-OS
+#
+# Later phases will add: core (API + storage), recorder, motion-gate, detector.
+
+[workspace]
+resolver = "2"
+members = [
+    "crates/spike-live",
+    "crates/spike-detect",
+]
+
+# Shared dependency versions live here so every crate stays in lockstep.
+[workspace.dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive", "env"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[workspace.package]
+edition = "2021"
+license = "MIT OR Apache-2.0"
+authors = ["ZoomyZoomyCamCam contributors"]
+repository = "https://github.com/410dood/ZoomyZoomyCamCam"
+
+# Optimize dependencies even in dev so video/inference spikes aren't painfully slow.
+[profile.dev.package."*"]
+opt-level = 2

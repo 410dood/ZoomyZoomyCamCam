@@ -1,0 +1,18 @@
+[package]
+name = "spike-live"
+version = "0.1.0"
+description = "Phase 0 spike: camera RTSP -> go2rtc -> WebRTC live view"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+# `which` lets us locate the go2rtc binary on PATH if GO2RTC_BIN isn't set.
+which = "6"
+# Open the live-view URL in the default browser for convenience.
+webbrowser = "1"

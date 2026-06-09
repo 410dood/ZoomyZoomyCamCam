@@ -1,0 +1,4 @@
+# Pin a recent stable toolchain so Windows + macOS builds match.
+[toolchain]
+channel = "stable"
+components = ["rustfmt", "clippy"]

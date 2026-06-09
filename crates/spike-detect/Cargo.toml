@@ -1,0 +1,44 @@
+[package]
+name = "spike-detect"
+version = "0.1.0"
+description = "Phase 0 spike: cross-platform YOLO object detection via ONNX Runtime"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+# ONNX Runtime bindings. This is the heart of the cross-platform AI story:
+# one model file, a per-OS GPU execution provider chosen at runtime.
+# `download-binaries` fetches a prebuilt ONNX Runtime so no system install is needed.
+# NOTE: `std` gates Session::commit_from_file and the std::error::Error impl on
+# ort::Error; `copy-dylibs` copies onnxruntime.dll next to the exe on Windows.
+ort = { version = "=2.0.0-rc.10", default-features = false, features = [
+    "std",
+    "ndarray",
+    "download-binaries",
+    "copy-dylibs",
+] }
+
+# Image loading / resizing for preprocessing.
+image = "0.25"
+# Tensor manipulation for pre/post-processing.
+ndarray = "0.16"
+
+# --- Per-OS GPU execution providers --------------------------------------
+# Each OS gets its native accelerator compiled in. On Windows that's DirectML
+# (any DX12 GPU: Nvidia/AMD/Intel); on macOS it's CoreML (Apple Silicon GPU +
+# Neural Engine); on Linux we offer CUDA. All fall back to CPU automatically.
+[target.'cfg(target_os = "windows")'.dependencies]
+ort = { version = "=2.0.0-rc.10", default-features = false, features = ["directml"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+ort = { version = "=2.0.0-rc.10", default-features = false, features = ["coreml"] }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+ort = { version = "=2.0.0-rc.10", default-features = false, features = ["cuda"] }

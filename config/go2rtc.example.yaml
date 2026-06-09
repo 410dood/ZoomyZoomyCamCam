@@ -1,0 +1,32 @@
+# Example go2rtc configuration.
+#
+# The spike-live program GENERATES a config like this from your --rtsp argument
+# (written to config/go2rtc.generated.yaml). This file is a hand-editable reference
+# showing the shape of a multi-camera setup for later phases.
+#
+# Docs: https://github.com/AlexxIT/go2rtc
+
+api:
+  listen: ":1984"        # web UI + WebRTC signalling (http://localhost:1984)
+
+rtsp:
+  listen: ":8554"        # go2rtc's own RTSP restream — the recorder will pull from here
+
+webrtc:
+  listen: ":8555"        # WebRTC media (TCP/UDP)
+  # For LAN use the defaults are fine. Add ICE/STUN here for remote access later.
+
+streams:
+  # Each key is a camera id. Value is one or more source URLs.
+  # Use the MAIN (high-res) stream for recording, SUB (low-res) for detection.
+  cam1:
+    - rtsp://USER:PASS@192.168.1.50:554/stream1   # main
+  cam1_sub:
+    - rtsp://USER:PASS@192.168.1.50:554/stream2   # sub (low-res, for motion + AI)
+
+  # Add more cameras as needed:
+  # cam2:
+  #   - rtsp://USER:PASS@192.168.1.51:554/stream1
+
+log:
+  level: info
