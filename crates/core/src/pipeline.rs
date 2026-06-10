@@ -315,6 +315,17 @@ pub fn run(
                             topic: None,
                         });
                         // Alarm Manager: fire every matching rule's action.
+                        let alarm_ev = crate::notify::AlarmEvent {
+                            event_id: id,
+                            camera: &cam.name,
+                            label: d.label,
+                            score: d.score,
+                            ts: now,
+                            snapshot_url: &format!("/api/snapshots/{snap_rel}"),
+                            snapshot_path: Some(&snap_abs),
+                            face: face_names[i].as_deref(),
+                            plate: plates[i].as_deref(),
+                        };
                         for rule in alarms.iter().filter(|r| {
                             r.matches(
                                 cam.id,
@@ -324,24 +335,7 @@ pub fn run(
                                 plates[i].as_deref(),
                             )
                         }) {
-                            tracing::info!(rule = %rule.name, event = id, "alarm triggered");
-                            match rule.action.as_str() {
-                                "webhook" => {
-                                    post_webhook(&rule.target, &cam.name, id, d, now, &snap_rel)
-                                }
-                                "mqtt" => {
-                                    let _ = mqtt_tx.send(crate::mqtt::EventMsg {
-                                        event_id: id,
-                                        camera: cam.name.clone(),
-                                        label: d.label.to_string(),
-                                        score: d.score,
-                                        ts: now,
-                                        snapshot: format!("/api/snapshots/{snap_rel}"),
-                                        topic: Some(format!("alarms/{}", rule.target)),
-                                    });
-                                }
-                                other => tracing::warn!("unknown alarm action {other:?}"),
-                            }
+                            crate::notify::fire(rule, &alarm_ev, &mqtt_tx);
                         }
                         new_event_ids.push(id);
                     }

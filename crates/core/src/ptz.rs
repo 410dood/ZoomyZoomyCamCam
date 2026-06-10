@@ -162,6 +162,137 @@ fn envelope(username: &str, password: &str, body: &str) -> String {
     )
 }
 
+/// A camera found by WS-Discovery.
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct Discovered {
+    pub host: String,
+    pub name: Option<String>,
+}
+
+/// ONVIF WS-Discovery: multicast a Probe to 239.255.255.250:3702 and collect
+/// responders for `timeout`. This is how Blue Iris "Find" and Synology's
+/// camera search work under the hood.
+///
+/// One probe socket per local IPv4 interface: on multi-homed machines (WSL /
+/// Hyper-V / VPN virtual adapters are near-universal on Windows) a 0.0.0.0
+/// bind sends the multicast out whichever interface the OS picks, which is
+/// often NOT the LAN where the cameras live.
+pub fn ws_discover(timeout: Duration) -> Result<Vec<Discovered>> {
+    use std::net::UdpSocket;
+
+    let mut sockets = Vec::new();
+    for ip in local_ipv4s() {
+        let Ok(socket) = UdpSocket::bind((ip, 0)) else {
+            continue;
+        };
+        let _ = socket.set_multicast_ttl_v4(2);
+        socket.set_nonblocking(true)?;
+        let msg_id: [u8; 16] = rand::random();
+        let probe = format!(
+            r#"<?xml version="1.0" encoding="UTF-8"?>
+<e:Envelope xmlns:e="http://www.w3.org/2003/05/soap-envelope"
+            xmlns:w="http://schemas.xmlsoap.org/ws/2004/08/addressing"
+            xmlns:d="http://schemas.xmlsoap.org/ws/2005/04/discovery"
+            xmlns:dn="http://www.onvif.org/ver10/network/wsdl">
+  <e:Header>
+    <w:MessageID>uuid:{}</w:MessageID>
+    <w:To e:mustUnderstand="true">urn:schemas-xmlsoap-org:ws:2005:04:discovery</w:To>
+    <w:Action e:mustUnderstand="true">http://schemas.xmlsoap.org/ws/2005/04/discovery/Probe</w:Action>
+  </e:Header>
+  <e:Body><d:Probe><d:Types>dn:NetworkVideoTransmitter</d:Types></d:Probe></e:Body>
+</e:Envelope>"#,
+            hex16(&msg_id)
+        );
+        if socket
+            .send_to(probe.as_bytes(), ("239.255.255.250", 3702))
+            .is_ok()
+        {
+            sockets.push(socket);
+        }
+    }
+    if sockets.is_empty() {
+        bail!("no usable network interface for discovery");
+    }
+
+    let deadline = std::time::Instant::now() + timeout;
+    let mut seen = std::collections::BTreeMap::<String, Option<String>>::new();
+    let mut buf = [0u8; 16384];
+    while std::time::Instant::now() < deadline {
+        let mut idle = true;
+        for socket in &sockets {
+            let Ok((n, addr)) = socket.recv_from(&mut buf) else {
+                continue;
+            };
+            idle = false;
+            let body = String::from_utf8_lossy(&buf[..n]).into_owned();
+            // Camera "name" scope: onvif://www.onvif.org/name/<urlencoded name>
+            let name = body
+                .split("onvif://www.onvif.org/name/")
+                .nth(1)
+                .map(|rest| {
+                    let end = rest.find([' ', '<', '"']).unwrap_or(rest.len());
+                    urldecode(&rest[..end]).replace('_', " ")
+                })
+                .filter(|s| !s.is_empty());
+            seen.entry(addr.ip().to_string()).or_insert(name);
+        }
+        if idle {
+            std::thread::sleep(Duration::from_millis(25));
+        }
+    }
+    Ok(seen
+        .into_iter()
+        .map(|(host, name)| Discovered { host, name })
+        .collect())
+}
+
+/// Local IPv4 addresses to probe from: the default-route interface (UDP
+/// connect trick) plus everything the machine's hostname resolves to.
+fn local_ipv4s() -> Vec<std::net::Ipv4Addr> {
+    use std::net::{IpAddr, Ipv4Addr, ToSocketAddrs, UdpSocket};
+
+    let mut out = std::collections::BTreeSet::new();
+    if let Ok(s) = UdpSocket::bind(("0.0.0.0", 0)) {
+        if s.connect(("8.8.8.8", 80)).is_ok() {
+            if let Ok(addr) = s.local_addr() {
+                if let IpAddr::V4(v4) = addr.ip() {
+                    out.insert(v4);
+                }
+            }
+        }
+    }
+    let host = std::env::var("COMPUTERNAME")
+        .or_else(|_| std::env::var("HOSTNAME"))
+        .unwrap_or_default();
+    if !host.is_empty() {
+        if let Ok(addrs) = (host.as_str(), 0u16).to_socket_addrs() {
+            for addr in addrs {
+                if let IpAddr::V4(v4) = addr.ip() {
+                    if !v4.is_loopback() {
+                        out.insert(v4);
+                    }
+                }
+            }
+        }
+    }
+    if out.is_empty() {
+        out.insert(Ipv4Addr::UNSPECIFIED);
+    }
+    out.into_iter().collect()
+}
+
+fn hex16(bytes: &[u8; 16]) -> String {
+    let h: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+    format!(
+        "{}-{}-{}-{}-{}",
+        &h[..8],
+        &h[8..12],
+        &h[12..16],
+        &h[16..20],
+        &h[20..]
+    )
+}
+
 fn extract_between<'a>(haystack: &'a str, start: &str, end: &str) -> Option<&'a str> {
     let from = haystack.find(start)? + start.len();
     let len = haystack[from..].find(end)?;

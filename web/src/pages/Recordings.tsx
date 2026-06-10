@@ -60,6 +60,7 @@ export default function Recordings({ cameras }: { cameras: Camera[] }) {
             <span className="muted">
               {fmtBytes(stats.total_bytes)} of recordings · {fmtBytes(stats.snapshots_bytes)} of
               snapshots · {stats.events_total} events all-time
+              {stats.disk_free_bytes != null && <> · {fmtBytes(stats.disk_free_bytes)} free on disk</>}
             </span>
           </div>
           {stats.cameras.map((c) => (

@@ -23,7 +23,8 @@ const RETENTION_EVERY: Duration = Duration::from_secs(60);
 pub fn run(
     db: Db,
     go2rtc: Arc<Go2Rtc>,
-    recordings_dir: PathBuf,
+    default_recordings_dir: PathBuf,
+    snapshots_dir: PathBuf,
     ffmpeg_bin: Option<PathBuf>,
     status: StatusBoard,
     shutdown: Arc<AtomicBool>,
@@ -36,14 +37,21 @@ pub fn run(
         }
     };
 
-    // Value carries the audio flag the recording was started with, so a
-    // settings flip restarts recorders with the new codec args.
-    let mut running: HashMap<i64, (bool, Recording)> = HashMap::new();
+    // Value carries the audio flag + output dir the recording was started
+    // with, so flipping either setting restarts recorders accordingly.
+    let mut running: HashMap<i64, (bool, PathBuf, Recording)> = HashMap::new();
     let mut last_retention = Instant::now() - RETENTION_EVERY;
 
     while !shutdown.load(Ordering::Relaxed) {
         let settings = db.settings();
         let cameras = db.list_cameras().unwrap_or_default();
+        // Storage option: a custom recordings root (other drive / NAS share)
+        // applies to new segments; old ones play from their indexed paths.
+        let recordings_dir = if settings.recordings_dir.trim().is_empty() {
+            default_recordings_dir.clone()
+        } else {
+            PathBuf::from(settings.recordings_dir.trim())
+        };
 
         // --- reconcile: stop unwanted, start missing/dead ----------------
         let desired: HashMap<i64, String> = cameras
@@ -58,21 +66,21 @@ pub fn run(
             .copied()
             .collect();
         for id in stop_ids {
-            if let Some((_, rec)) = running.remove(&id) {
+            if let Some((_, _, rec)) = running.remove(&id) {
                 rec.stop();
             }
         }
 
         for (id, name) in &desired {
+            let dir = recordings_dir.join(name);
             let healthy = running
                 .get_mut(id)
-                .map(|(audio, r)| r.is_alive() && *audio == settings.record_audio)
+                .map(|(audio, d, r)| r.is_alive() && *audio == settings.record_audio && *d == dir)
                 .unwrap_or(false);
             if !healthy {
-                if let Some((_, dead)) = running.remove(id) {
+                if let Some((_, _, dead)) = running.remove(id) {
                     dead.stop();
                 }
-                let dir = recordings_dir.join(name);
                 match Recording::start(
                     &ffmpeg,
                     name,
@@ -82,7 +90,7 @@ pub fn run(
                     settings.record_audio,
                 ) {
                     Ok(rec) => {
-                        running.insert(*id, (settings.record_audio, rec));
+                        running.insert(*id, (settings.record_audio, dir.clone(), rec));
                     }
                     Err(e) => tracing::warn!(camera = %name, "failed to start recording: {e:#}"),
                 }
@@ -172,10 +180,7 @@ pub fn run(
                     - i64::from(settings.event_retention_days) * 86_400;
                 match db.prune_events_before(cutoff) {
                     Ok(snapshots) if !snapshots.is_empty() => {
-                        let snap_dir = recordings_dir
-                            .parent()
-                            .map(|p| p.join("snapshots"))
-                            .unwrap_or_else(|| PathBuf::from("data/snapshots"));
+                        let snap_dir = snapshots_dir.clone();
                         for s in &snapshots {
                             let _ = std::fs::remove_file(snap_dir.join(s));
                         }
@@ -195,7 +200,7 @@ pub fn run(
     }
 
     tracing::info!("stopping {} recording(s)", running.len());
-    for (_, (_, rec)) in running.drain() {
+    for (_, (_, _, rec)) in running.drain() {
         rec.stop();
     }
 }

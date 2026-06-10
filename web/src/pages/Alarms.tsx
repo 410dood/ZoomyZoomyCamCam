@@ -16,7 +16,7 @@ export default function Alarms({
   const [label, setLabel] = useState("");
   const [faceLike, setFaceLike] = useState("");
   const [plateLike, setPlateLike] = useState("");
-  const [action, setAction] = useState<"webhook" | "mqtt">("webhook");
+  const [action, setAction] = useState<"webhook" | "mqtt" | "ntfy">("webhook");
   const [target, setTarget] = useState("");
 
   const load = () => {
@@ -105,9 +105,10 @@ export default function Alarms({
           </div>
           <div className="row">
             <span className="muted">…do this:</span>
-            <select value={action} onChange={(e) => setAction(e.target.value as "webhook" | "mqtt")}>
+            <select value={action} onChange={(e) => setAction(e.target.value as "webhook" | "mqtt" | "ntfy")}>
               <option value="webhook">POST webhook</option>
               <option value="mqtt">publish MQTT</option>
+              <option value="ntfy">push via ntfy</option>
             </select>
             <input
               type="text"
@@ -115,7 +116,13 @@ export default function Alarms({
               value={target}
               onChange={(e) => setTarget(e.target.value)}
               required
-              placeholder={action === "webhook" ? "https://… (receives the event JSON)" : "topic suffix → zoomy/alarms/<suffix>"}
+              placeholder={
+                action === "webhook"
+                  ? "https://… (receives the event JSON)"
+                  : action === "mqtt"
+                    ? "topic suffix → zoomy/alarms/<suffix>"
+                    : "https://ntfy.sh/your-secret-topic (push to phone, snapshot attached)"
+              }
             />
             <button className="primary">Create rule</button>
           </div>
@@ -146,7 +153,11 @@ export default function Alarms({
                   </td>
                   <td className="muted">{describe(r)}</td>
                   <td className="muted">
-                    {r.action === "webhook" ? `POST ${r.target}` : `MQTT zoomy/alarms/${r.target}`}
+                    {r.action === "webhook"
+                      ? `POST ${r.target}`
+                      : r.action === "mqtt"
+                        ? `MQTT zoomy/alarms/${r.target}`
+                        : `ntfy push → ${r.target}`}
                   </td>
                   <td>
                     <span

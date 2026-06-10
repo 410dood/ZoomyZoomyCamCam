@@ -16,6 +16,7 @@ mod db;
 mod go2rtc;
 pub mod lpr;
 mod mqtt;
+mod notify;
 mod pipeline;
 mod ptz;
 mod record;
@@ -81,15 +82,16 @@ pub async fn run(
     // Recording manager + detection pipeline run on their own threads (both
     // drive blocking child processes / inference).
     let rec_thread = std::thread::Builder::new().name("recorder".into()).spawn({
-        let (db, go2rtc, dir, stop) = (
+        let (db, go2rtc, dir, snaps, stop) = (
             db.clone(),
             go2rtc.clone(),
             recordings_dir.clone(),
+            snapshots_dir.clone(),
             workers_stop.clone(),
         );
         let ffmpeg_bin = cfg.ffmpeg_bin.clone();
         let status = status_board.clone();
-        move || record::run(db, go2rtc, dir, ffmpeg_bin, status, stop)
+        move || record::run(db, go2rtc, dir, snaps, ffmpeg_bin, status, stop)
     })?;
     let (mqtt_tx, mqtt_rx) = std::sync::mpsc::channel::<mqtt::EventMsg>();
     let mqtt_tx2 = mqtt_tx.clone();
@@ -142,6 +144,7 @@ pub async fn run(
         snapshots_dir,
         clips_dir: cfg.data_dir.join("clips"),
         faces_dir: cfg.data_dir.join("faces"),
+        recordings_dir_default: recordings_dir.clone(),
         ffmpeg_bin: cfg.ffmpeg_bin.clone(),
         status: status_board,
         sessions: auth::Sessions::default(),

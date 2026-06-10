@@ -46,6 +46,7 @@ rumqttc = "0.24"
 tokenizers = { version = "0.21", default-features = false, features = ["fancy-regex"] }
 base64 = "0.22"
 rand = "0.9"
+fs2 = "0.4"
 
 [workspace.package]
 edition = "2021"

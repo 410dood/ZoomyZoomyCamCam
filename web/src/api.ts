@@ -62,6 +62,7 @@ export interface Settings {
   retention_gb: number;
   event_retention_days: number;
   enhanced_retention_days: number;
+  recordings_dir: string;
   model_path: string;
   force_cpu: boolean;
   go2rtc_api_port: number;
@@ -90,6 +91,13 @@ export interface Stats {
   total_bytes: number;
   snapshots_bytes: number;
   events_total: number;
+  disk_free_bytes: number;
+  recordings_root: string;
+}
+
+export interface DiscoveredCam {
+  host: string;
+  name: string | null;
 }
 
 export interface AppConfig {
@@ -208,6 +216,7 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ host, username, password }),
     }),
+  scanNetwork: () => req<{ cameras: DiscoveredCam[] }>("/api/discover/scan"),
   stats: () => req<Stats>("/api/stats"),
   settings: () => req<Settings>("/api/settings"),
   saveSettings: (s: Settings) =>

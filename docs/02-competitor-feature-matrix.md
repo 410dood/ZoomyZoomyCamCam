@@ -38,6 +38,9 @@ which of those features we adopt, in what order.*
 | 18 | PTZ autotracking | Frigate 0.13 | ✅ shipped (move path validated; closed loop pending daylight detections) |
 | 19 | Audio event classification (YAMNet) | Frigate, UniFi AI | ✅ shipped (validated live: tone -> alarm event @0.92 with snapshot) |
 | 20 | Enhanced Retention (re-encode aging footage) | UniFi Protect | ✅ shipped (validated: 16.4MB segment -> 2.5MB, playable) |
+| 21 | One-click network camera scan (WS-Discovery) | Blue Iris "Find", Synology camera search | ✅ shipped (validated: found 7 LAN cameras incl. both real ones; probes every local interface to survive WSL/Hyper-V multi-homing) |
+| 22 | Phone push notifications via ntfy (snapshot attached) | UniFi/Reolink push, Frigate notify add-ons | ✅ shipped (validated live: rule fired, ntfy.sh delivered title + message + snapshot.jpg) |
+| 23 | Configurable storage location + free-space display | Blue Iris multi-drive clips, Synology volumes | ✅ shipped (validated: segments wrote + indexed to alt dir, recorders auto-restart on dir change, bad path rejected with 400, free space shown) |
 
 Sources: [Frigate docs](https://docs.frigate.video/), [Frigate releases](https://github.com/blakeblackshear/frigate/releases),
 [Frigate review system](https://docs.frigate.video/configuration/review/),

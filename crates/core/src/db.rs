@@ -208,6 +208,9 @@ pub struct Settings {
     /// Enhanced retention (UniFi-style): segments older than this many days
     /// are re-encoded to space-saving quality. 0 = off.
     pub enhanced_retention_days: u32,
+    /// Where new recordings go (any drive or UNC share); empty = the default
+    /// data/recordings. Existing segments keep playing from where they are.
+    pub recordings_dir: String,
     pub model_path: String,
     pub force_cpu: bool,
     pub go2rtc_api_port: u16,
@@ -263,6 +266,7 @@ impl Default for Settings {
             retention_gb: 50,
             event_retention_days: 30,
             enhanced_retention_days: 0,
+            recordings_dir: String::new(),
             model_path: "yolov8n.onnx".into(),
             force_cpu: false,
             go2rtc_api_port: 1984,

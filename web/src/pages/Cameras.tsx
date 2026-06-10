@@ -1,5 +1,5 @@
 ﻿import { FormEvent, useEffect, useState } from "react";
-import { api, Camera, DetectConfig, StatusMap, Zone } from "../api";
+import { api, Camera, DetectConfig, DiscoveredCam, StatusMap, Zone } from "../api";
 
 function TuneModal({
   camera,
@@ -192,6 +192,20 @@ export default function Cameras({
   const [user, setUser] = useState("admin");
   const [pass, setPass] = useState("");
   const [found, setFound] = useState<string | null>(null);
+  const [scanning, setScanning] = useState(false);
+  const [scanned, setScanned] = useState<DiscoveredCam[] | null>(null);
+
+  const scan = async () => {
+    setScanning(true);
+    try {
+      const r = await api.scanNetwork();
+      setScanned(r.cameras);
+    } catch (e) {
+      onError(`network scan failed: ${e}`);
+    } finally {
+      setScanning(false);
+    }
+  };
 
   const resolve = async () => {
     setBusy(true);
@@ -258,6 +272,25 @@ export default function Cameras({
 
       <div className="card">
         <h2>Add camera</h2>
+        <div className="row" style={{ marginBottom: 10 }}>
+          <button type="button" className="ghost" disabled={scanning} onClick={scan}>
+            {scanning ? "Scanning…" : "📡 Scan network for cameras"}
+          </button>
+          {scanned !== null && scanned.length === 0 && (
+            <span className="muted">no ONVIF cameras responded</span>
+          )}
+          {scanned?.map((c) => (
+            <span
+              key={c.host}
+              className={`pill toggle ${ip === c.host ? "on" : ""}`}
+              title="click to fill the IP field"
+              onClick={() => setIp(c.host)}
+            >
+              {c.host}
+              {c.name ? ` — ${c.name}` : ""}
+            </span>
+          ))}
+        </div>
         <div className="row" style={{ marginBottom: 14 }}>
           <label className="field">
             camera IP / host

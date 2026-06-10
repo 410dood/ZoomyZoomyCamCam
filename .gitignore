@@ -52,3 +52,5 @@ Thumbs.db
 /plate2.mp4
 /dist/
 /yamnet_class_map.csv
+
+web/tsconfig.tsbuildinfo

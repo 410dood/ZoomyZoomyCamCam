@@ -1,4 +1,4 @@
-//! HTTP API consumed by the web UI (and anything else — it's plain JSON).
+﻿//! HTTP API consumed by the web UI (and anything else — it's plain JSON).
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -23,6 +23,7 @@ pub struct AppState {
     pub snapshots_dir: PathBuf,
     pub clips_dir: PathBuf,
     pub faces_dir: PathBuf,
+    pub recordings_dir_default: PathBuf,
     pub ffmpeg_bin: Option<PathBuf>,
     pub status: StatusBoard,
     pub sessions: crate::auth::Sessions,
@@ -38,6 +39,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/status", get(camera_status))
         .route("/api/cameras", get(list_cameras).post(add_camera))
         .route("/api/discover", axum::routing::post(discover))
+        .route("/api/discover/scan", get(discover_scan))
         .route(
             "/api/cameras/{id}",
             get(get_camera).patch(patch_camera).delete(delete_camera),
@@ -219,6 +221,16 @@ async fn discover(
     .await
     .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
     Ok(Json(body))
+}
+
+/// Scan the LAN for ONVIF cameras (WS-Discovery multicast, ~2.5s).
+async fn discover_scan(State(_st): State<AppState>) -> ApiResult<Json<serde_json::Value>> {
+    let found = tokio::task::spawn_blocking(|| {
+        crate::ptz::ws_discover(std::time::Duration::from_millis(2500))
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))??;
+    Ok(Json(serde_json::json!({ "cameras": found })))
 }
 
 /// Percent-encode credential characters that would break URL parsing.
@@ -542,8 +554,8 @@ async fn add_alarm_api(
     if rule.name.trim().is_empty() {
         return Err(bad_request("rule name required"));
     }
-    if !matches!(rule.action.as_str(), "webhook" | "mqtt") {
-        return Err(bad_request("action must be webhook or mqtt"));
+    if !matches!(rule.action.as_str(), "webhook" | "mqtt" | "ntfy") {
+        return Err(bad_request("action must be webhook, mqtt or ntfy"));
     }
     if rule.target.trim().is_empty() {
         return Err(bad_request("target required (URL or MQTT topic suffix)"));
@@ -773,11 +785,23 @@ async fn stats(State(st): State<AppState>) -> ApiResult<Json<serde_json::Value>>
                 .sum()
         })
         .unwrap_or(0);
+    // Free space on the volume holding new recordings.
+    let settings = st.db.settings();
+    let rec_root = if settings.recordings_dir.trim().is_empty() {
+        st.recordings_dir_default.clone()
+    } else {
+        PathBuf::from(settings.recordings_dir.trim())
+    };
+    let disk_free = fs2::available_space(&rec_root)
+        .or_else(|_| fs2::available_space(std::path::Path::new(".")))
+        .unwrap_or(0);
     Ok(Json(serde_json::json!({
         "cameras": cameras,
         "total_bytes": total_bytes,
         "snapshots_bytes": snapshots_bytes,
         "events_total": st.db.count_events()?,
+        "disk_free_bytes": disk_free,
+        "recordings_root": rec_root.to_string_lossy(),
     })))
 }
 
@@ -799,6 +823,18 @@ async fn put_settings(
     }
     if s.poll_ms < 100 {
         return Err(bad_request("poll_ms must be at least 100"));
+    }
+    // A custom recordings root must be creatable + writable before we accept
+    // it — the recorder thread would otherwise fail silently every cycle.
+    let rec_root = s.recordings_dir.trim();
+    if !rec_root.is_empty() {
+        let p = PathBuf::from(rec_root);
+        std::fs::create_dir_all(&p)
+            .map_err(|e| bad_request(format!("recordings dir not creatable: {e}")))?;
+        let probe = p.join(".zoomy-write-test");
+        std::fs::write(&probe, b"ok")
+            .map_err(|e| bad_request(format!("recordings dir not writable: {e}")))?;
+        let _ = std::fs::remove_file(&probe);
     }
     st.db.save_settings(&s)?;
     Ok(Json(st.db.settings()))

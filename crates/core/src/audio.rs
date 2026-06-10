@@ -229,38 +229,23 @@ pub fn run(
                             snapshot: format!("/api/snapshots/{snap_rel}"),
                             topic: None,
                         });
+                        let snap_abs = snapshots_dir.join(&snap_rel);
+                        let alarm_ev = crate::notify::AlarmEvent {
+                            event_id: id,
+                            camera: &cam.name,
+                            label: &label,
+                            score,
+                            ts: now,
+                            snapshot_url: &format!("/api/snapshots/{snap_rel}"),
+                            snapshot_path: snapshot.is_some().then_some(snap_abs.as_path()),
+                            face: None,
+                            plate: None,
+                        };
                         for rule in alarms
                             .iter()
                             .filter(|r| r.matches(cam.id, &label, score, None, None))
                         {
-                            tracing::info!(rule = %rule.name, event = id, "alarm triggered");
-                            if rule.action == "mqtt" {
-                                let _ = mqtt_tx.send(crate::mqtt::EventMsg {
-                                    event_id: id,
-                                    camera: cam.name.clone(),
-                                    label: label.clone(),
-                                    score,
-                                    ts: now,
-                                    snapshot: format!("/api/snapshots/{snap_rel}"),
-                                    topic: Some(format!("alarms/{}", rule.target)),
-                                });
-                            } else if rule.action == "webhook" {
-                                let payload = serde_json::json!({
-                                    "type": "audio",
-                                    "event_id": id,
-                                    "camera": cam.name,
-                                    "label": label,
-                                    "score": score,
-                                    "ts": now,
-                                });
-                                let url = rule.target.clone();
-                                if let Err(e) = ureq::post(&url)
-                                    .timeout(Duration::from_secs(3))
-                                    .send_json(payload)
-                                {
-                                    tracing::debug!("alarm webhook failed: {e}");
-                                }
-                            }
+                            crate::notify::fire(rule, &alarm_ev, &mqtt_tx);
                         }
                     }
                     Err(e) => tracing::warn!("audio event insert failed: {e:#}"),

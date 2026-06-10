@@ -254,6 +254,15 @@ export default function Settings({ onError }: { onError: (e: string) => void }) 
                 }
               />
             </label>
+            <label className="field" style={{ minWidth: 300 }}>
+              recordings folder (empty = data/recordings; another drive or NAS share works)
+              <input
+                type="text"
+                placeholder="D:\zoomy-recordings or \\nas\cams"
+                value={s.recordings_dir ?? ""}
+                onChange={(e) => set({ recordings_dir: e.target.value })}
+              />
+            </label>
             <label className="field">
               model path
               <input
