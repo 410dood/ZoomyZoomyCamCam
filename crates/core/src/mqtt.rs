@@ -17,7 +17,8 @@ use rumqttc::{Client, LastWill, MqttOptions, QoS};
 
 use crate::db::Db;
 
-/// What the pipeline sends per detection.
+/// What the pipeline sends per detection. `topic` overrides the standard
+/// topics — used by Alarm Manager rules with an mqtt action.
 #[derive(Clone, Debug)]
 pub struct EventMsg {
     pub event_id: i64,
@@ -26,6 +27,7 @@ pub struct EventMsg {
     pub score: f32,
     pub ts: i64,
     pub snapshot: String,
+    pub topic: Option<String>,
 }
 
 type Credentials = Option<(String, String)>;
@@ -114,18 +116,31 @@ pub fn run(db: Db, rx: Receiver<EventMsg>, shutdown: Arc<AtomicBool>) {
                         "snapshot": ev.snapshot,
                     })
                     .to_string();
-                    let _ = client.publish(
-                        format!("{prefix}/events"),
-                        QoS::AtLeastOnce,
-                        false,
-                        payload,
-                    );
-                    let _ = client.publish(
-                        format!("{prefix}/{}/{}", ev.camera, ev.label),
-                        QoS::AtLeastOnce,
-                        false,
-                        format!("{:.2}", ev.score),
-                    );
+                    match &ev.topic {
+                        // Alarm rule with a custom topic: publish there only.
+                        Some(t) => {
+                            let _ = client.publish(
+                                format!("{prefix}/{t}"),
+                                QoS::AtLeastOnce,
+                                false,
+                                payload,
+                            );
+                        }
+                        None => {
+                            let _ = client.publish(
+                                format!("{prefix}/events"),
+                                QoS::AtLeastOnce,
+                                false,
+                                payload,
+                            );
+                            let _ = client.publish(
+                                format!("{prefix}/{}/{}", ev.camera, ev.label),
+                                QoS::AtLeastOnce,
+                                false,
+                                format!("{:.2}", ev.score),
+                            );
+                        }
+                    }
                 }
                 Err(RecvTimeoutError::Timeout) => {
                     // Re-read settings so URL changes take effect.

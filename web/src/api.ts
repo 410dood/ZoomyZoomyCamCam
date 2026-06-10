@@ -92,6 +92,20 @@ export interface AppConfig {
   go2rtc_base: string;
 }
 
+export interface AlarmRule {
+  id: number;
+  name: string;
+  enabled: boolean;
+  camera_id: number | null;
+  label: string | null;
+  face_like: string | null;
+  plate_like: string | null;
+  min_score: number;
+  action: string;
+  target: string;
+  created_ts: number;
+}
+
 export interface CamStatus {
   online: boolean;
   recording: boolean;
@@ -154,6 +168,12 @@ export const api = {
     req<{ segment: Segment; offset_secs: number }>(
       `/api/recordings/at?camera_id=${camera_id}&ts=${ts}`
     ),
+  alarms: () => req<AlarmRule[]>("/api/alarms"),
+  addAlarm: (r: Omit<AlarmRule, "id" | "created_ts">) =>
+    req<{ id: number }>("/api/alarms", { method: "POST", body: JSON.stringify(r) }),
+  patchAlarm: (id: number, enabled: boolean) =>
+    req<void>(`/api/alarms/${id}`, { method: "PATCH", body: JSON.stringify({ enabled }) }),
+  deleteAlarm: (id: number) => req<void>(`/api/alarms/${id}`, { method: "DELETE" }),
   search: (q: string, limit = 24) =>
     req<{ results: { similarity: number; event: CamEvent }[] }>(
       `/api/search?q=${encodeURIComponent(q)}&limit=${limit}`

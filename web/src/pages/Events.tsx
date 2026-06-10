@@ -10,6 +10,8 @@ export default function Events({ cameras }: { cameras: Camera[] }) {
   const [query, setQuery] = useState("");
   const [searchResults, setSearchResults] = useState<CamEvent[] | null>(null);
   const [searching, setSearching] = useState(false);
+  const [faceFilter, setFaceFilter] = useState("");
+  const [plateFilter, setPlateFilter] = useState("");
 
   const runSearch = async () => {
     const q = query.trim();
@@ -30,6 +32,31 @@ export default function Events({ cameras }: { cameras: Camera[] }) {
   const [open, setOpen] = useState<CamEvent | null>(null);
   const [playing, setPlaying] = useState<{ segment: Segment; offset: number } | null>(null);
   const [noClip, setNoClip] = useState<number | null>(null);
+
+  // Protect-style playback shortcuts: space pause, arrows seek (shift =
+  // frame-ish steps), f fullscreen, Esc close.
+  useEffect(() => {
+    if (!playing) return;
+    const onKey = (e: KeyboardEvent) => {
+      const v = document.querySelector<HTMLVideoElement>(".modal-bg video");
+      if (!v) return;
+      if (e.key === " ") {
+        e.preventDefault();
+        if (v.paused) v.play();
+        else v.pause();
+      } else if (e.key === "ArrowLeft") {
+        v.currentTime = Math.max(0, v.currentTime - (e.shiftKey ? 1 / 15 : 5));
+      } else if (e.key === "ArrowRight") {
+        v.currentTime = Math.min(v.duration, v.currentTime + (e.shiftKey ? 1 / 15 : 5));
+      } else if (e.key === "f") {
+        v.requestFullscreen().catch(() => {});
+      } else if (e.key === "Escape") {
+        setPlaying(null);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [playing]);
 
   const jumpToRecording = async (ev: CamEvent) => {
     try {
@@ -68,9 +95,15 @@ export default function Events({ cameras }: { cameras: Camera[] }) {
   }, [cameraId, label]);
 
   const labels = [...new Set(events.map((e) => e.label))];
-  const shown =
+  const faces = [...new Set(events.map((e) => e.face).filter(Boolean))] as string[];
+  let shown =
     searchResults ??
     (review === "alerts" ? events.filter((e) => alertLabels.includes(e.label)) : events);
+  if (faceFilter) shown = shown.filter((e) => e.face === faceFilter);
+  if (plateFilter.trim())
+    shown = shown.filter((e) =>
+      (e.plate ?? "").toUpperCase().includes(plateFilter.trim().toUpperCase())
+    );
 
   return (
     <>
@@ -130,6 +163,21 @@ export default function Events({ cameras }: { cameras: Camera[] }) {
             </option>
           ))}
         </select>
+        <select value={faceFilter} onChange={(e) => setFaceFilter(e.target.value)}>
+          <option value="">anyone</option>
+          {faces.map((f) => (
+            <option key={f} value={f}>
+              👤 {f}
+            </option>
+          ))}
+        </select>
+        <input
+          type="text"
+          placeholder="plate…"
+          style={{ width: 110 }}
+          value={plateFilter}
+          onChange={(e) => setPlateFilter(e.target.value)}
+        />
         <span className="muted">{shown.length} events · auto-refreshing</span>
       </div>
 

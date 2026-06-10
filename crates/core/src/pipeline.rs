@@ -78,6 +78,7 @@ pub fn run(
         }
 
         let cameras = db.list_cameras().unwrap_or_default();
+        let alarms = db.list_alarms().unwrap_or_default();
         for cam in cameras.iter().filter(|c| c.enabled && c.detect) {
             if shutdown.load(Ordering::Relaxed) {
                 break;
@@ -308,7 +309,37 @@ pub fn run(
                             score: d.score,
                             ts: now,
                             snapshot: format!("/api/snapshots/{snap_rel}"),
+                            topic: None,
                         });
+                        // Alarm Manager: fire every matching rule's action.
+                        for rule in alarms.iter().filter(|r| {
+                            r.matches(
+                                cam.id,
+                                d.label,
+                                d.score,
+                                face_names[i].as_deref(),
+                                plates[i].as_deref(),
+                            )
+                        }) {
+                            tracing::info!(rule = %rule.name, event = id, "alarm triggered");
+                            match rule.action.as_str() {
+                                "webhook" => {
+                                    post_webhook(&rule.target, &cam.name, id, d, now, &snap_rel)
+                                }
+                                "mqtt" => {
+                                    let _ = mqtt_tx.send(crate::mqtt::EventMsg {
+                                        event_id: id,
+                                        camera: cam.name.clone(),
+                                        label: d.label.to_string(),
+                                        score: d.score,
+                                        ts: now,
+                                        snapshot: format!("/api/snapshots/{snap_rel}"),
+                                        topic: Some(format!("alarms/{}", rule.target)),
+                                    });
+                                }
+                                other => tracing::warn!("unknown alarm action {other:?}"),
+                            }
+                        }
                         new_event_ids.push(id);
                     }
                     Err(e) => tracing::warn!("event insert failed: {e:#}"),

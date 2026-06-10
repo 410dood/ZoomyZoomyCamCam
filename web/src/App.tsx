@@ -2,12 +2,13 @@ import { useEffect, useState } from "react";
 import { api, AppConfig, Camera } from "./api";
 import Live from "./pages/Live";
 import Cameras from "./pages/Cameras";
+import Alarms from "./pages/Alarms";
 import Events from "./pages/Events";
 import Faces from "./pages/Faces";
 import Recordings from "./pages/Recordings";
 import Settings from "./pages/Settings";
 
-const PAGES = ["Live", "Events", "Recordings", "Faces", "Cameras", "Settings"] as const;
+const PAGES = ["Live", "Events", "Recordings", "Faces", "Alarms", "Cameras", "Settings"] as const;
 type Page = (typeof PAGES)[number];
 
 const ICONS: Record<Page, string> = {
@@ -15,6 +16,7 @@ const ICONS: Record<Page, string> = {
   Events: "🔔",
   Recordings: "🎞️",
   Faces: "👤",
+  Alarms: "🚨",
   Cameras: "🎥",
   Settings: "⚙️",
 };
@@ -106,6 +108,7 @@ export default function App() {
         {page === "Events" && <Events cameras={cameras} />}
         {page === "Recordings" && <Recordings cameras={cameras} />}
         {page === "Faces" && <Faces onError={setError} />}
+        {page === "Alarms" && <Alarms cameras={cameras} onError={setError} />}
         {page === "Cameras" && (
           <Cameras cameras={cameras} onChange={refresh} onError={setError} />
         )}

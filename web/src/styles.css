@@ -379,6 +379,72 @@ button.danger:hover { background: rgba(240, 56, 59, 0.12); }
 .smart-search input:focus { border: none; }
 .smart-search .hint { color: var(--muted); font-size: 0.74rem; white-space: nowrap; }
 
+/* --- camera detail view (Protect-style) --------------------------------------- */
+.detail-overlay {
+  position: fixed;
+  inset: 0;
+  background: var(--bg);
+  z-index: 8;
+  padding: 18px 26px;
+  overflow-y: auto;
+}
+.detail-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+.detail-body {
+  display: grid;
+  grid-template-columns: 1fr 320px;
+  gap: 16px;
+}
+.detail-main { min-width: 0; display: flex; flex-direction: column; gap: 12px; }
+.detail-side {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px;
+  max-height: calc(100vh - 110px);
+  overflow-y: auto;
+}
+.feed-item {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  padding: 8px;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 0.84rem;
+}
+.feed-item:hover { background: var(--panel-2); }
+.feed-item img {
+  width: 84px;
+  aspect-ratio: 4 / 3;
+  object-fit: cover;
+  border-radius: 6px;
+  background: #000;
+  flex-shrink: 0;
+}
+
+.tile .expand {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 3;
+  opacity: 0;
+  transition: opacity 0.15s;
+  background: rgba(10, 12, 16, 0.78);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  color: var(--text);
+  border-radius: 8px;
+  width: 34px;
+  height: 34px;
+  cursor: pointer;
+  font-size: 0.9rem;
+}
+.tile:hover .expand { opacity: 1; }
+
 .dot {
   width: 8px;
   height: 8px;

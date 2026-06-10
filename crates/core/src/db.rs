@@ -85,6 +85,73 @@ pub struct Event {
     pub plate: Option<String>,
 }
 
+/// Alarm Manager rule (UniFi style if-this-then-that): all set conditions
+/// must match an event; `None` conditions match anything.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AlarmRule {
+    #[serde(default)]
+    pub id: i64,
+    pub name: String,
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    pub camera_id: Option<i64>,
+    pub label: Option<String>,
+    /// Substring match on the recognized face name.
+    pub face_like: Option<String>,
+    /// Substring match on the OCRed plate.
+    pub plate_like: Option<String>,
+    #[serde(default)]
+    pub min_score: f32,
+    /// "webhook" (POST event JSON to target URL) or "mqtt" (publish to
+    /// {prefix}/{target}).
+    pub action: String,
+    pub target: String,
+    #[serde(default)]
+    pub created_ts: i64,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+impl AlarmRule {
+    pub fn matches(
+        &self,
+        camera_id: i64,
+        label: &str,
+        score: f32,
+        face: Option<&str>,
+        plate: Option<&str>,
+    ) -> bool {
+        if !self.enabled || score < self.min_score {
+            return false;
+        }
+        if self.camera_id.map(|c| c != camera_id).unwrap_or(false) {
+            return false;
+        }
+        if self.label.as_deref().map(|l| l != label).unwrap_or(false) {
+            return false;
+        }
+        if let Some(f) = self.face_like.as_deref() {
+            let hit = face
+                .map(|v| v.to_lowercase().contains(&f.to_lowercase()))
+                .unwrap_or(false);
+            if !hit {
+                return false;
+            }
+        }
+        if let Some(p) = self.plate_like.as_deref() {
+            let hit = plate
+                .map(|v| v.to_uppercase().contains(&p.to_uppercase()))
+                .unwrap_or(false);
+            if !hit {
+                return false;
+            }
+        }
+        true
+    }
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct FaceRow {
     pub id: i64,
@@ -253,6 +320,19 @@ impl Db {
              CREATE TABLE IF NOT EXISTS event_embeddings (
                  event_id  INTEGER PRIMARY KEY REFERENCES events(id) ON DELETE CASCADE,
                  embedding BLOB NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS alarms (
+                 id         INTEGER PRIMARY KEY,
+                 name       TEXT NOT NULL,
+                 enabled    INTEGER NOT NULL DEFAULT 1,
+                 camera_id  INTEGER,
+                 label      TEXT,
+                 face_like  TEXT,
+                 plate_like TEXT,
+                 min_score  REAL NOT NULL DEFAULT 0,
+                 action     TEXT NOT NULL,
+                 target     TEXT NOT NULL,
+                 created_ts INTEGER NOT NULL
              );",
         )?;
         Ok(Self(Arc::new(Mutex::new(conn))))
@@ -430,6 +510,71 @@ impl Db {
             )
             .optional()?;
         Ok(ev)
+    }
+
+    // --- alarms --------------------------------------------------------------
+
+    pub fn add_alarm(&self, r: &AlarmRule) -> Result<i64> {
+        let conn = self.conn();
+        conn.execute(
+            "INSERT INTO alarms (name, enabled, camera_id, label, face_like, plate_like,
+             min_score, action, target, created_ts)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            params![
+                r.name,
+                r.enabled,
+                r.camera_id,
+                r.label,
+                r.face_like,
+                r.plate_like,
+                r.min_score,
+                r.action,
+                r.target,
+                chrono::Local::now().timestamp()
+            ],
+        )?;
+        Ok(conn.last_insert_rowid())
+    }
+
+    pub fn list_alarms(&self) -> Result<Vec<AlarmRule>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT id, name, enabled, camera_id, label, face_like, plate_like,
+                    min_score, action, target, created_ts
+             FROM alarms ORDER BY id",
+        )?;
+        let rows = stmt
+            .query_map([], |r| {
+                Ok(AlarmRule {
+                    id: r.get(0)?,
+                    name: r.get(1)?,
+                    enabled: r.get::<_, i64>(2)? != 0,
+                    camera_id: r.get(3)?,
+                    label: r.get(4)?,
+                    face_like: r.get(5)?,
+                    plate_like: r.get(6)?,
+                    min_score: r.get(7)?,
+                    action: r.get(8)?,
+                    target: r.get(9)?,
+                    created_ts: r.get(10)?,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
+    pub fn set_alarm_enabled(&self, id: i64, enabled: bool) -> Result<()> {
+        self.conn().execute(
+            "UPDATE alarms SET enabled=?1 WHERE id=?2",
+            params![enabled, id],
+        )?;
+        Ok(())
+    }
+
+    pub fn delete_alarm(&self, id: i64) -> Result<()> {
+        self.conn()
+            .execute("DELETE FROM alarms WHERE id=?1", [id])?;
+        Ok(())
     }
 
     // --- smart-search embeddings -------------------------------------------
@@ -769,6 +914,74 @@ mod tests {
         let z = back.detect_config.ignore_zones[0];
         assert!(z.contains(0.25, 0.25));
         assert!(!z.contains(0.75, 0.25));
+    }
+
+    #[test]
+    fn alarm_rules_match_conditions() {
+        let rule = AlarmRule {
+            id: 1,
+            name: "person at door".into(),
+            enabled: true,
+            camera_id: Some(3),
+            label: Some("person".into()),
+            face_like: None,
+            plate_like: None,
+            min_score: 0.5,
+            action: "webhook".into(),
+            target: "http://x".into(),
+            created_ts: 0,
+        };
+        assert!(rule.matches(3, "person", 0.8, None, None));
+        assert!(!rule.matches(2, "person", 0.8, None, None)); // wrong camera
+        assert!(!rule.matches(3, "car", 0.8, None, None)); // wrong label
+        assert!(!rule.matches(3, "person", 0.3, None, None)); // below score
+
+        let face_rule = AlarmRule {
+            camera_id: None,
+            label: None,
+            face_like: Some("coat".into()),
+            min_score: 0.0,
+            ..rule.clone()
+        };
+        assert!(face_rule.matches(1, "person", 0.9, Some("dark-COAT-guy"), None));
+        assert!(!face_rule.matches(1, "person", 0.9, None, None));
+
+        let plate_rule = AlarmRule {
+            face_like: None,
+            plate_like: Some("au77".into()),
+            ..face_rule
+        };
+        assert!(plate_rule.matches(1, "car", 0.9, None, Some("B8AU77")));
+        assert!(!plate_rule.matches(1, "car", 0.9, None, Some("XYZ123")));
+
+        let mut disabled = plate_rule.clone();
+        disabled.enabled = false;
+        assert!(!disabled.matches(1, "car", 0.9, None, Some("B8AU77")));
+    }
+
+    #[test]
+    fn alarm_crud_roundtrip() {
+        let db = mem_db();
+        let id = db
+            .add_alarm(&AlarmRule {
+                id: 0,
+                name: "r1".into(),
+                enabled: true,
+                camera_id: None,
+                label: Some("person".into()),
+                face_like: None,
+                plate_like: None,
+                min_score: 0.0,
+                action: "webhook".into(),
+                target: "http://t".into(),
+                created_ts: 0,
+            })
+            .unwrap();
+        assert_eq!(db.list_alarms().unwrap().len(), 1);
+        db.set_alarm_enabled(id, false).unwrap();
+        assert!(!db.list_alarms().unwrap()[0].enabled);
+        db.delete_alarm(id).unwrap();
+        assert!(db.list_alarms().unwrap().is_empty());
     }
 
     #[test]

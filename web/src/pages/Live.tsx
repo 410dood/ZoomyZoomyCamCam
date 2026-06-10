@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { api, AppConfig, Camera, StatusMap } from "../api";
+import CameraDetail from "../CameraDetail";
 
 /// Hold-to-move PTZ pad, shown only on cameras that answer ONVIF PTZ.
 function PtzPad({ cameraId }: { cameraId: number }) {
@@ -53,6 +54,7 @@ export default function Live({
 }) {
   const [status, setStatus] = useState<StatusMap>({});
   const [ptz, setPtz] = useState<Record<number, boolean>>({});
+  const [detail, setDetail] = useState<Camera | null>(null);
 
   useEffect(() => {
     const load = () => api.status().then(setStatus).catch(() => {});
@@ -102,11 +104,23 @@ export default function Live({
                 src={`${config.go2rtc_base}/stream.html?src=${encodeURIComponent(cam.name)}&mode=webrtc`}
                 allow="autoplay"
               />
+              <button className="expand" title="Open camera view" onClick={() => setDetail(cam)}>
+                ⤢
+              </button>
               {ptz[cam.id] && <PtzPad cameraId={cam.id} />}
             </div>
           );
         })}
       </div>
+
+      {detail && (
+        <CameraDetail
+          camera={detail}
+          config={config}
+          ptz={!!ptz[detail.id]}
+          onClose={() => setDetail(null)}
+        />
+      )}
     </>
   );
 }

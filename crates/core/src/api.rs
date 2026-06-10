@@ -46,6 +46,11 @@ pub fn router(state: AppState) -> Router {
         .route("/api/events", get(list_events))
         .route("/api/events/{id}/clip", get(event_clip))
         .route("/api/search", get(smart_search))
+        .route("/api/alarms", get(list_alarms_api).post(add_alarm_api))
+        .route(
+            "/api/alarms/{id}",
+            axum::routing::patch(patch_alarm_api).delete(delete_alarm_api),
+        )
         .route("/api/faces", get(faces_overview).post(enroll_face))
         .route("/api/faces/{id}", axum::routing::delete(delete_face_api))
         .route("/api/faces/unknown/{file}", get(unknown_face_img))
@@ -522,6 +527,51 @@ async fn snapshot(
         return Err(not_found());
     }
     Ok(ServeFile::new(path).oneshot(req).await.into_response())
+}
+
+// --- alarm manager -----------------------------------------------------------
+
+async fn list_alarms_api(State(st): State<AppState>) -> ApiResult<Json<Vec<crate::db::AlarmRule>>> {
+    Ok(Json(st.db.list_alarms()?))
+}
+
+async fn add_alarm_api(
+    State(st): State<AppState>,
+    Json(rule): Json<crate::db::AlarmRule>,
+) -> ApiResult<(StatusCode, Json<serde_json::Value>)> {
+    if rule.name.trim().is_empty() {
+        return Err(bad_request("rule name required"));
+    }
+    if !matches!(rule.action.as_str(), "webhook" | "mqtt") {
+        return Err(bad_request("action must be webhook or mqtt"));
+    }
+    if rule.target.trim().is_empty() {
+        return Err(bad_request("target required (URL or MQTT topic suffix)"));
+    }
+    let id = st.db.add_alarm(&rule)?;
+    Ok((StatusCode::CREATED, Json(serde_json::json!({ "id": id }))))
+}
+
+#[derive(Deserialize)]
+struct AlarmPatch {
+    enabled: bool,
+}
+
+async fn patch_alarm_api(
+    State(st): State<AppState>,
+    Path(id): Path<i64>,
+    Json(p): Json<AlarmPatch>,
+) -> ApiResult<StatusCode> {
+    st.db.set_alarm_enabled(id, p.enabled)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn delete_alarm_api(
+    State(st): State<AppState>,
+    Path(id): Path<i64>,
+) -> ApiResult<StatusCode> {
+    st.db.delete_alarm(id)?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 // --- smart search ------------------------------------------------------------
