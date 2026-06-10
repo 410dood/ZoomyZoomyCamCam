@@ -235,6 +235,26 @@ export default function Settings({ onError }: { onError: (e: string) => void }) 
               />
             </label>
             <label className="field">
+              reduce quality after (days, 0 = off)
+              <input
+                type="number" min="0"
+                value={s.enhanced_retention_days}
+                onChange={(e) =>
+                  set({ enhanced_retention_days: num(e.target.value, s.enhanced_retention_days) })
+                }
+              />
+            </label>
+            <label className="field">
+              keep events (days)
+              <input
+                type="number" min="1"
+                value={s.event_retention_days}
+                onChange={(e) =>
+                  set({ event_retention_days: num(e.target.value, s.event_retention_days) })
+                }
+              />
+            </label>
+            <label className="field">
               model path
               <input
                 type="text"

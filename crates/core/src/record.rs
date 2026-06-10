@@ -115,6 +115,46 @@ pub fn run(
                 .iter()
                 .map(|c| recordings_dir.join(&c.name))
                 .collect();
+            // Enhanced retention (UniFi-style) runs BEFORE deletion-based
+            // pruning: shrinking old footage is the alternative to losing it
+            // when the size cap bites. Bounded per cycle so a backlog cannot
+            // starve the recorder loop.
+            if settings.enhanced_retention_days > 0 {
+                let cutoff = chrono::Local::now().timestamp()
+                    - i64::from(settings.enhanced_retention_days) * 86_400;
+                match db.reduction_candidates(cutoff, 3) {
+                    Ok(candidates) => {
+                        for (path, _ts) in candidates {
+                            let p = PathBuf::from(&path);
+                            if !p.exists() {
+                                let _ = db.delete_segment_by_path(&path);
+                                continue;
+                            }
+                            match recorder::reencode_segment(&ffmpeg, &p) {
+                                Ok(new_bytes) => {
+                                    let _ = db.mark_segment_reduced(&path, new_bytes);
+                                    tracing::info!(
+                                        segment = %p.display(),
+                                        new_mb = format!("{:.1}", new_bytes as f64 / 1e6),
+                                        "enhanced retention: segment reduced"
+                                    );
+                                }
+                                Err(e) => {
+                                    // Mark anyway so a stubborn file is not
+                                    // retried forever.
+                                    let _ = db.mark_segment_reduced(
+                                        &path,
+                                        p.metadata().map(|m| m.len()).unwrap_or(0),
+                                    );
+                                    tracing::debug!("enhanced retention skip: {e:#}");
+                                }
+                            }
+                        }
+                    }
+                    Err(e) => tracing::warn!("enhanced retention query failed: {e:#}"),
+                }
+            }
+
             let max_bytes = u64::from(settings.retention_gb) * 1_000_000_000;
             match recorder::prune(&dirs, Some(settings.retention_days), Some(max_bytes)) {
                 Ok(deleted) => {

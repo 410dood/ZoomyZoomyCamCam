@@ -60,6 +60,8 @@ export interface Settings {
   segment_seconds: number;
   retention_days: number;
   retention_gb: number;
+  event_retention_days: number;
+  enhanced_retention_days: number;
   model_path: string;
   force_cpu: boolean;
   go2rtc_api_port: number;

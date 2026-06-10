@@ -205,6 +205,9 @@ pub struct Settings {
     pub retention_gb: u32,
     /// Events (and their snapshots) older than this are deleted.
     pub event_retention_days: u32,
+    /// Enhanced retention (UniFi-style): segments older than this many days
+    /// are re-encoded to space-saving quality. 0 = off.
+    pub enhanced_retention_days: u32,
     pub model_path: String,
     pub force_cpu: bool,
     pub go2rtc_api_port: u16,
@@ -259,6 +262,7 @@ impl Default for Settings {
             retention_days: 7,
             retention_gb: 50,
             event_retention_days: 30,
+            enhanced_retention_days: 0,
             model_path: "yolov8n.onnx".into(),
             force_cpu: false,
             go2rtc_api_port: 1984,
@@ -339,6 +343,10 @@ impl Db {
         let _ = conn.execute("ALTER TABLE cameras ADD COLUMN detect_source TEXT", []);
         let _ = conn.execute("ALTER TABLE events ADD COLUMN face TEXT", []);
         let _ = conn.execute("ALTER TABLE events ADD COLUMN plate TEXT", []);
+        let _ = conn.execute(
+            "ALTER TABLE segments ADD COLUMN reduced INTEGER NOT NULL DEFAULT 0",
+            [],
+        );
         conn.execute_batch(
             "CREATE TABLE IF NOT EXISTS faces (
                  id         INTEGER PRIMARY KEY,
@@ -693,6 +701,31 @@ impl Db {
     pub fn delete_segment_by_path(&self, path: &str) -> Result<()> {
         self.conn()
             .execute("DELETE FROM segments WHERE path = ?1", [path])?;
+        Ok(())
+    }
+
+    /// Oldest not-yet-reduced segments that started before `cutoff_ts`,
+    /// for the enhanced-retention re-encoder. Bounded by `limit`.
+    pub fn reduction_candidates(&self, cutoff_ts: i64, limit: u32) -> Result<Vec<(String, i64)>> {
+        let conn = self.conn();
+        let mut stmt = conn.prepare(
+            "SELECT path, start_ts FROM segments
+             WHERE reduced = 0 AND start_ts < ?1
+             ORDER BY start_ts ASC LIMIT ?2",
+        )?;
+        let rows = stmt
+            .query_map(params![cutoff_ts, limit], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows)
+    }
+
+    pub fn mark_segment_reduced(&self, path: &str, new_bytes: u64) -> Result<()> {
+        self.conn().execute(
+            "UPDATE segments SET reduced = 1, bytes = ?1 WHERE path = ?2",
+            params![new_bytes as i64, path],
+        )?;
         Ok(())
     }
 

@@ -173,6 +173,50 @@ fn parse_segment_start(file_name: &str) -> Option<i64> {
         .map(|dt| dt.timestamp())
 }
 
+/// Re-encode a segment to space-saving quality (720p max, CRF 30, veryfast)
+/// and atomically replace the original. Returns the new size in bytes.
+/// UniFi-style "enhanced retention": old footage keeps existing at a fraction
+/// of the storage cost.
+pub fn reencode_segment(ffmpeg: &Path, path: &Path) -> Result<u64> {
+    let tmp = path.with_extension("tmp.mp4");
+    let status = Command::new(ffmpeg)
+        .args(["-loglevel", "error", "-y", "-i"])
+        .arg(path)
+        .args([
+            "-vf",
+            "scale='min(1280,iw)':-2",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "30",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "64k",
+            "-movflags",
+            "+faststart",
+        ])
+        .arg(&tmp)
+        .status()
+        .context("running ffmpeg re-encode")?;
+    if !status.success() {
+        let _ = std::fs::remove_file(&tmp);
+        anyhow::bail!("re-encode failed for {}", path.display());
+    }
+    let new_bytes = std::fs::metadata(&tmp)?.len();
+    let old_bytes = std::fs::metadata(path).map(|m| m.len()).unwrap_or(u64::MAX);
+    if new_bytes >= old_bytes {
+        // Not worth it (already small/efficient); keep the original.
+        let _ = std::fs::remove_file(&tmp);
+        anyhow::bail!("re-encode did not shrink {}", path.display());
+    }
+    std::fs::remove_file(path).context("removing original segment")?;
+    std::fs::rename(&tmp, path).context("installing re-encoded segment")?;
+    Ok(new_bytes)
+}
+
 /// Delete the oldest completed segments until the directory tree fits both
 /// limits. Returns the deleted paths so the caller can drop their index rows.
 pub fn prune(

@@ -37,6 +37,7 @@ which of those features we adopt, in what order.*
 | 17 | Natural-language smart search (CLIP) | UniFi AI Key | ✅ shipped (validated ranking on live events) |
 | 18 | PTZ autotracking | Frigate 0.13 | ✅ shipped (move path validated; closed loop pending daylight detections) |
 | 19 | Audio event classification (YAMNet) | Frigate, UniFi AI | ✅ shipped (validated live: tone -> alarm event @0.92 with snapshot) |
+| 20 | Enhanced Retention (re-encode aging footage) | UniFi Protect | ✅ shipped (validated: 16.4MB segment -> 2.5MB, playable) |
 
 Sources: [Frigate docs](https://docs.frigate.video/), [Frigate releases](https://github.com/blakeblackshear/frigate/releases),
 [Frigate review system](https://docs.frigate.video/configuration/review/),
