@@ -382,6 +382,18 @@ pub struct Settings {
     pub mqtt_url: String,
     /// Topic prefix for MQTT publishes.
     pub mqtt_prefix: String,
+    /// Publish Home Assistant MQTT-discovery configs so HA auto-creates a
+    /// binary_sensor per (camera, object) and a last-detection sensor per camera.
+    pub mqtt_ha_discovery: bool,
+    /// HA discovery topic prefix (HA's default is "homeassistant").
+    pub mqtt_ha_prefix: String,
+    /// Seconds a discovery binary_sensor stays "ON" after a detection before it
+    /// is auto-cleared to "OFF".
+    pub mqtt_state_timeout_secs: u64,
+    /// Optional webhook body template. Empty = the default detection JSON.
+    /// Placeholders: {{event_id}} {{camera}} {{label}} {{score}} {{ts}}
+    /// {{snapshot}} {{face}} {{plate}} {{gesture}} (unknowns render empty).
+    pub webhook_template: String,
     /// Run face recognition on person detections (needs the two face models
     /// on disk; silently inactive when they are missing).
     pub face_recognition: bool,
@@ -448,6 +460,10 @@ impl Default for Settings {
             alert_labels: ["person"].map(String::from).to_vec(),
             mqtt_url: String::new(),
             mqtt_prefix: "zoomy".into(),
+            mqtt_ha_discovery: true,
+            mqtt_ha_prefix: "homeassistant".into(),
+            mqtt_state_timeout_secs: 30,
+            webhook_template: String::new(),
             face_recognition: true,
             face_match_threshold: 0.4,
             face_det_model: "det_10g.onnx".into(),

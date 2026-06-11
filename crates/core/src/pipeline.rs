@@ -306,7 +306,15 @@ pub fn run(
                             "event recorded"
                         );
                         if !settings.webhook_url.is_empty() {
-                            post_webhook(&settings.webhook_url, &cam.name, id, d, now, &snap_rel);
+                            post_webhook(
+                                &settings.webhook_url,
+                                &settings.webhook_template,
+                                &cam.name,
+                                id,
+                                d,
+                                now,
+                                &snap_rel,
+                            );
                         }
                         let _ = mqtt_tx.send(crate::mqtt::EventMsg {
                             event_id: id,
@@ -330,6 +338,7 @@ pub fn run(
                             plate: plates[i].as_deref(),
                             gesture: None,
                             base_url: &settings.public_base_url,
+                            webhook_template: &settings.webhook_template,
                         };
                         for rule in alarms.iter().filter(|r| {
                             r.matches(
@@ -544,28 +553,52 @@ fn save_unknown_face(
 /// Fire-and-forget event notification (Blue Iris alarm-server style). Runs on
 /// the pipeline thread with a short timeout; a dead listener must never stall
 /// detection, so failures are logged at debug and dropped.
+#[allow(clippy::too_many_arguments)]
 fn post_webhook(
     url: &str,
+    template: &str,
     camera: &str,
     event_id: i64,
     d: &detector::Detection,
     ts: i64,
     snapshot: &str,
 ) {
-    let payload = serde_json::json!({
-        "type": "detection",
-        "event_id": event_id,
-        "camera": camera,
-        "label": d.label,
-        "score": d.score,
-        "box": [d.x1, d.y1, d.x2, d.y2],
-        "ts": ts,
-        "snapshot": format!("/api/snapshots/{snapshot}"),
-    });
-    if let Err(e) = ureq::post(url)
-        .timeout(Duration::from_secs(3))
-        .send_json(payload)
-    {
+    let snapshot_url = format!("/api/snapshots/{snapshot}");
+    let result = if template.is_empty() {
+        let payload = serde_json::json!({
+            "type": "detection",
+            "event_id": event_id,
+            "camera": camera,
+            "label": d.label,
+            "score": d.score,
+            "box": [d.x1, d.y1, d.x2, d.y2],
+            "ts": ts,
+            "snapshot": snapshot_url,
+        });
+        ureq::post(url)
+            .timeout(Duration::from_secs(3))
+            .send_json(payload)
+    } else {
+        let ev = crate::notify::AlarmEvent {
+            event_id,
+            camera,
+            label: d.label,
+            score: d.score,
+            ts,
+            snapshot_url: &snapshot_url,
+            snapshot_path: None,
+            face: None,
+            plate: None,
+            gesture: None,
+            base_url: "",
+            webhook_template: template,
+        };
+        ureq::post(url)
+            .timeout(Duration::from_secs(3))
+            .set("Content-Type", "application/json")
+            .send_string(&crate::notify::render_template(template, &ev))
+    };
+    if let Err(e) = result {
         tracing::debug!("webhook delivery failed: {e}");
     }
 }

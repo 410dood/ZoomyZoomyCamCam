@@ -611,6 +611,7 @@ async fn record_gesture(
     let mqtt_tx = st.mqtt_tx.clone();
     let webhook_url = settings.webhook_url.clone();
     let base_url = settings.public_base_url.clone();
+    let webhook_template = settings.webhook_template.clone();
     let camera = cam.name.clone();
     let gesture_owned = canonical.to_string();
     let snap_path = snapshot.as_ref().map(|_| snap_abs.clone());
@@ -627,21 +628,28 @@ async fn record_gesture(
             plate: None,
             gesture: Some(&gesture_owned),
             base_url: &base_url,
+            webhook_template: &webhook_template,
         };
         if !webhook_url.is_empty() {
-            let payload = serde_json::json!({
-                "type": "gesture",
-                "event_id": id,
-                "camera": camera,
-                "label": "gesture",
-                "gesture": gesture_owned,
-                "score": score,
-                "ts": now,
-                "snapshot": ev.snapshot_url,
-            });
+            let body = if webhook_template.is_empty() {
+                serde_json::json!({
+                    "type": "gesture",
+                    "event_id": id,
+                    "camera": camera,
+                    "label": "gesture",
+                    "gesture": gesture_owned,
+                    "score": score,
+                    "ts": now,
+                    "snapshot": ev.snapshot_url,
+                })
+                .to_string()
+            } else {
+                crate::notify::render_template(&webhook_template, &ev)
+            };
             if let Err(e) = ureq::post(&webhook_url)
                 .timeout(std::time::Duration::from_secs(3))
-                .send_json(payload)
+                .set("Content-Type", "application/json")
+                .send_string(&body)
             {
                 tracing::debug!("gesture webhook failed: {e}");
             }

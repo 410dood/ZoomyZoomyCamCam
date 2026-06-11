@@ -272,6 +272,44 @@ export default function Settings({ onError }: { onError: (e: string) => void }) 
                 onChange={(e) => set({ mqtt_prefix: e.target.value })}
               />
             </label>
+            <label className="toggle field" title="Publish MQTT-discovery configs so Home Assistant auto-creates a binary_sensor per (camera, object) and a last-detection sensor per camera.">
+              Home Assistant discovery
+              <input
+                type="checkbox"
+                checked={s.mqtt_ha_discovery}
+                onChange={() => set({ mqtt_ha_discovery: !s.mqtt_ha_discovery })}
+              />
+            </label>
+            <label className="field">
+              HA discovery prefix
+              <input
+                type="text"
+                value={s.mqtt_ha_prefix}
+                onChange={(e) => set({ mqtt_ha_prefix: e.target.value })}
+              />
+            </label>
+            <label className="field" title="Seconds a Home Assistant binary_sensor stays ON after a detection before auto-clearing.">
+              sensor ON timeout (s)
+              <input
+                type="number" min="1"
+                value={s.mqtt_state_timeout_secs}
+                onChange={(e) => set({ mqtt_state_timeout_secs: num(e.target.value, s.mqtt_state_timeout_secs) })}
+              />
+            </label>
+          </div>
+          <div className="row" style={{ marginTop: 10 }}>
+            <label className="field" style={{ flex: 1, minWidth: 420 }}>
+              webhook body template (empty = default JSON; placeholders like{" "}
+              <code>{"{{camera}}"}</code> <code>{"{{label}}"}</code> <code>{"{{score}}"}</code>{" "}
+              <code>{"{{snapshot}}"}</code> — see docs/03)
+              <textarea
+                rows={2}
+                placeholder='{"text":"{{label}} on {{camera}} ({{score}})"}'
+                value={s.webhook_template ?? ""}
+                onChange={(e) => set({ webhook_template: e.target.value })}
+                style={{ width: "100%", fontFamily: "monospace" }}
+              />
+            </label>
           </div>
         </div>
 

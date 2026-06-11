@@ -245,6 +245,7 @@ pub fn run(
                             plate: None,
                             gesture: None,
                             base_url: &settings.public_base_url,
+                            webhook_template: &settings.webhook_template,
                         };
                         for rule in alarms.iter().filter(|r| {
                             r.matches(cam.id, &label, score, None, None, None)

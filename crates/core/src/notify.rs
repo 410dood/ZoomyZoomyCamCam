@@ -33,6 +33,46 @@ pub struct AlarmEvent<'a> {
     /// Public base URL (e.g. "https://nvr.example.com"); when set, pushes carry
     /// tap-through "View clip" / "Snapshot" action links. Empty = no links.
     pub base_url: &'a str,
+    /// Optional webhook body template ({{placeholder}} form). Empty = default
+    /// detection JSON.
+    pub webhook_template: &'a str,
+}
+
+/// JSON-escape a value so substituting it into a JSON template stays valid.
+fn json_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// Render a webhook body template, substituting `{{key}}` placeholders with the
+/// event's fields (JSON-escaped). Unknown placeholders are left untouched.
+pub fn render_template(tpl: &str, ev: &AlarmEvent) -> String {
+    let fields: [(&str, String); 9] = [
+        ("event_id", ev.event_id.to_string()),
+        ("camera", json_escape(ev.camera)),
+        ("label", json_escape(ev.label)),
+        ("score", format!("{:.3}", ev.score)),
+        ("ts", ev.ts.to_string()),
+        ("snapshot", json_escape(ev.snapshot_url)),
+        ("face", json_escape(ev.face.unwrap_or(""))),
+        ("plate", json_escape(ev.plate.unwrap_or(""))),
+        ("gesture", json_escape(ev.gesture.unwrap_or(""))),
+    ];
+    let mut out = tpl.to_string();
+    for (k, v) in &fields {
+        out = out.replace(&format!("{{{{{k}}}}}"), v);
+    }
+    out
 }
 
 /// Is the rule clear to fire right now? False when snoozed or still inside its
@@ -89,22 +129,30 @@ pub fn ntfy_text(url: &str, title: &str, message: &str, tags: &str) {
 }
 
 fn webhook(url: &str, ev: &AlarmEvent) {
-    let payload = serde_json::json!({
-        "type": "alarm",
-        "event_id": ev.event_id,
-        "camera": ev.camera,
-        "label": ev.label,
-        "score": ev.score,
-        "ts": ev.ts,
-        "snapshot": ev.snapshot_url,
-        "face": ev.face,
-        "plate": ev.plate,
-        "gesture": ev.gesture,
-    });
-    if let Err(e) = ureq::post(url)
-        .timeout(Duration::from_secs(3))
-        .send_json(payload)
-    {
+    let result = if ev.webhook_template.is_empty() {
+        let payload = serde_json::json!({
+            "type": "alarm",
+            "event_id": ev.event_id,
+            "camera": ev.camera,
+            "label": ev.label,
+            "score": ev.score,
+            "ts": ev.ts,
+            "snapshot": ev.snapshot_url,
+            "face": ev.face,
+            "plate": ev.plate,
+            "gesture": ev.gesture,
+        });
+        ureq::post(url)
+            .timeout(Duration::from_secs(3))
+            .send_json(payload)
+    } else {
+        let body = render_template(ev.webhook_template, ev);
+        ureq::post(url)
+            .timeout(Duration::from_secs(3))
+            .set("Content-Type", "application/json")
+            .send_string(&body)
+    };
+    if let Err(e) = result {
         tracing::debug!("alarm webhook failed: {e}");
     }
 }
@@ -212,5 +260,35 @@ mod tests {
         let r = rule(3, 0, 5000);
         assert!(!ready(&r, &throttle, 4999)); // still snoozed
         assert!(ready(&r, &throttle, 5001)); // snooze elapsed
+    }
+
+    #[test]
+    fn template_renders_and_escapes() {
+        let ev = AlarmEvent {
+            event_id: 7,
+            camera: "front-door",
+            label: "person",
+            score: 0.9123,
+            ts: 1000,
+            snapshot_url: "/api/snapshots/x.jpg",
+            snapshot_path: None,
+            face: Some("Bob \"the\" Builder"),
+            plate: None,
+            gesture: None,
+            base_url: "",
+            webhook_template: "",
+        };
+        let out = render_template(
+            r#"{"cam":"{{camera}}","obj":"{{label}}","who":"{{face}}","p":{{score}},"miss":"{{nope}}"}"#,
+            &ev,
+        );
+        // Valid JSON after substitution (quotes in the face name are escaped).
+        let v: serde_json::Value = serde_json::from_str(&out).unwrap();
+        assert_eq!(v["cam"], "front-door");
+        assert_eq!(v["obj"], "person");
+        assert_eq!(v["who"], "Bob \"the\" Builder");
+        assert_eq!(v["p"], 0.912);
+        // Unknown placeholder is left as-is.
+        assert_eq!(v["miss"], "{{nope}}");
     }
 }
