@@ -294,6 +294,7 @@ pub fn run(
                     face_names[i].as_deref(),
                     plates[i].as_deref(),
                     None,
+                    zone_for(d, &cam.detect_config, fw, fh).as_deref(),
                 ) {
                     Ok(id) => {
                         tracing::info!(
@@ -655,6 +656,24 @@ fn passes_zones_and_size(
         return false;
     }
     true
+}
+
+/// The name of the (required) zone a detection's anchor falls in, for tagging
+/// the event so review can filter by zone. `None` when not in a named zone.
+fn zone_for(
+    d: &detector::Detection,
+    cfg: &crate::db::DetectConfig,
+    fw: f32,
+    fh: f32,
+) -> Option<String> {
+    let cx = (d.x1 + d.x2) / 2.0 / fw;
+    let cy = (d.y1 + d.y2) / 2.0 / fh;
+    cfg.zones
+        .iter()
+        .find(|z| {
+            z.kind == crate::db::ZoneKind::Required && z.applies_to(d.label) && z.contains(cx, cy)
+        })
+        .map(|z| z.name.clone())
 }
 
 /// Black out the privacy-mask polygons (frame-fraction coordinates) in place.

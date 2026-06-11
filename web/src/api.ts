@@ -55,6 +55,7 @@ export interface CamEvent {
   face: string | null;
   plate: string | null;
   gesture: string | null;
+  zone: string | null;
 }
 
 export interface Segment {
@@ -196,11 +197,24 @@ export const api = {
   patchCamera: (id: number, patch: Partial<Camera>) =>
     req<Camera>(`/api/cameras/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
   deleteCamera: (id: number) => req<void>(`/api/cameras/${id}`, { method: "DELETE" }),
-  events: (q: { camera_id?: number; label?: string; gesture?: string; limit?: number } = {}) => {
+  events: (
+    q: {
+      camera_id?: number;
+      label?: string;
+      gesture?: string;
+      zone?: string;
+      after?: number;
+      before?: number;
+      limit?: number;
+    } = {}
+  ) => {
     const p = new URLSearchParams();
     if (q.camera_id != null) p.set("camera_id", String(q.camera_id));
     if (q.label) p.set("label", q.label);
     if (q.gesture) p.set("gesture", q.gesture);
+    if (q.zone) p.set("zone", q.zone);
+    if (q.after != null) p.set("after", String(q.after));
+    if (q.before != null) p.set("before", String(q.before));
     if (q.limit) p.set("limit", String(q.limit));
     return req<CamEvent[]>(`/api/events?${p}`);
   },

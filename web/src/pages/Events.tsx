@@ -13,6 +13,9 @@ export default function Events({ cameras }: { cameras: Camera[] }) {
   const [faceFilter, setFaceFilter] = useState("");
   const [plateFilter, setPlateFilter] = useState("");
   const [gestureFilter, setGestureFilter] = useState("");
+  const [zoneFilter, setZoneFilter] = useState("");
+  const [fromTime, setFromTime] = useState("");
+  const [toTime, setToTime] = useState("");
 
   const runSearch = async () => {
     const q = query.trim();
@@ -71,10 +74,14 @@ export default function Events({ cameras }: { cameras: Camera[] }) {
   };
 
   const load = () => {
+    const after = fromTime ? Math.floor(new Date(fromTime).getTime() / 1000) : undefined;
+    const before = toTime ? Math.floor(new Date(toTime).getTime() / 1000) : undefined;
     api
       .events({
         camera_id: cameraId === "" ? undefined : cameraId,
         label: label || undefined,
+        after,
+        before,
         limit: 200,
       })
       .then(setEvents)
@@ -93,20 +100,30 @@ export default function Events({ cameras }: { cameras: Camera[] }) {
     const t = setInterval(load, 5000); // events appear as they happen
     return () => clearInterval(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cameraId, label]);
+  }, [cameraId, label, fromTime, toTime]);
 
   const labels = [...new Set(events.map((e) => e.label))];
   const faces = [...new Set(events.map((e) => e.face).filter(Boolean))] as string[];
   const gestures = [...new Set(events.map((e) => e.gesture).filter(Boolean))] as string[];
+  const zones = [...new Set(events.map((e) => e.zone).filter(Boolean))] as string[];
   let shown =
     searchResults ??
     (review === "alerts" ? events.filter((e) => alertLabels.includes(e.label)) : events);
   if (faceFilter) shown = shown.filter((e) => e.face === faceFilter);
   if (gestureFilter) shown = shown.filter((e) => e.gesture === gestureFilter);
+  if (zoneFilter) shown = shown.filter((e) => e.zone === zoneFilter);
   if (plateFilter.trim())
     shown = shown.filter((e) =>
       (e.plate ?? "").toUpperCase().includes(plateFilter.trim().toUpperCase())
     );
+
+  // Explore: object-type counts across the loaded window (pre object-filter).
+  const exploreBase = searchResults ?? events;
+  const counts = exploreBase.reduce<Record<string, number>>((acc, e) => {
+    acc[e.label] = (acc[e.label] ?? 0) + 1;
+    return acc;
+  }, {});
+  const topLabels = Object.entries(counts).sort((a, b) => b[1] - a[1]);
 
   return (
     <>
@@ -184,6 +201,33 @@ export default function Events({ cameras }: { cameras: Camera[] }) {
             ))}
           </select>
         )}
+        {zones.length > 0 && (
+          <select value={zoneFilter} onChange={(e) => setZoneFilter(e.target.value)}>
+            <option value="">any zone</option>
+            {zones.map((z) => (
+              <option key={z} value={z}>
+                ▱ {z}
+              </option>
+            ))}
+          </select>
+        )}
+        <label className="field" title="from">
+          <input type="datetime-local" value={fromTime} onChange={(e) => setFromTime(e.target.value)} />
+        </label>
+        <label className="field" title="to">
+          <input type="datetime-local" value={toTime} onChange={(e) => setToTime(e.target.value)} />
+        </label>
+        {(fromTime || toTime) && (
+          <button
+            className="ghost"
+            onClick={() => {
+              setFromTime("");
+              setToTime("");
+            }}
+          >
+            clear time
+          </button>
+        )}
         <input
           type="text"
           placeholder="plate…"
@@ -193,6 +237,27 @@ export default function Events({ cameras }: { cameras: Camera[] }) {
         />
         <span className="muted">{shown.length} events · auto-refreshing</span>
       </div>
+
+      {topLabels.length > 0 && !searchResults && (
+        <div className="row" style={{ marginBottom: 12, flexWrap: "wrap" }}>
+          <span className="muted">Explore:</span>
+          <span
+            className={`pill toggle ${label === "" ? "on" : ""}`}
+            onClick={() => setLabel("")}
+          >
+            all ({exploreBase.length})
+          </span>
+          {topLabels.map(([l, n]) => (
+            <span
+              key={l}
+              className={`pill toggle ${label === l ? "on" : ""}`}
+              onClick={() => setLabel(label === l ? "" : l)}
+            >
+              {l} ({n})
+            </span>
+          ))}
+        </div>
+      )}
 
       {shown.length === 0 ? (
         <div className="empty">
@@ -204,7 +269,7 @@ export default function Events({ cameras }: { cameras: Camera[] }) {
           {shown.map((ev) => (
             <div className="event-card" key={ev.id} onClick={() => setOpen(ev)}>
               {ev.snapshot ? (
-                <img src={`/api/snapshots/${ev.snapshot}`} alt={ev.label} loading="lazy" />
+                <img src={`/api/snapshots/${ev.snapshot}?w=400`} alt={ev.label} loading="lazy" />
               ) : (
                 <div style={{ aspectRatio: "4 / 3", background: "#000" }} />
               )}
@@ -213,6 +278,7 @@ export default function Events({ cameras }: { cameras: Camera[] }) {
                 {ev.face && <span style={{ color: "var(--ok)" }}> · 👤 {ev.face}</span>}
                 {ev.plate && <span style={{ color: "var(--warn)" }}> · 🚗 {ev.plate}</span>}
                 {ev.gesture && <span style={{ color: "var(--accent, #4f8cff)" }}> · ✋ {ev.gesture}</span>}
+                {ev.zone && <span className="muted"> · ▱ {ev.zone}</span>}
                 <div className="muted">{fmtTime(ev.ts)}</div>
                 <div className="row" style={{ marginTop: 8 }}>
                   <button

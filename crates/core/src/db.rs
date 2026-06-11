@@ -172,6 +172,9 @@ pub struct Event {
     /// Recognized hand signal (e.g. "open_palm", "victory"), when the event
     /// came from the hand-signal recognizer.
     pub gesture: Option<String>,
+    /// Name of the detection zone the object was in, when it fell inside a
+    /// named polygon zone (used for review filtering).
+    pub zone: Option<String>,
 }
 
 /// Alarm Manager rule (UniFi style if-this-then-that): all set conditions
@@ -547,6 +550,7 @@ impl Db {
         let _ = conn.execute("ALTER TABLE events ADD COLUMN face TEXT", []);
         let _ = conn.execute("ALTER TABLE events ADD COLUMN plate TEXT", []);
         let _ = conn.execute("ALTER TABLE events ADD COLUMN gesture TEXT", []);
+        let _ = conn.execute("ALTER TABLE events ADD COLUMN zone TEXT", []);
         let _ = conn.execute(
             "ALTER TABLE segments ADD COLUMN reduced INTEGER NOT NULL DEFAULT 0",
             [],
@@ -693,41 +697,47 @@ impl Db {
         face: Option<&str>,
         plate: Option<&str>,
         gesture: Option<&str>,
+        zone: Option<&str>,
     ) -> Result<i64> {
         let conn = self.conn();
         conn.execute(
-            "INSERT INTO events (camera_id, ts, label, score, x1, y1, x2, y2, snapshot, face, plate, gesture)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            "INSERT INTO events (camera_id, ts, label, score, x1, y1, x2, y2, snapshot, face, plate, gesture, zone)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             params![
                 camera_id, ts, label, score, bbox[0], bbox[1], bbox[2], bbox[3], snapshot, face,
-                plate, gesture
+                plate, gesture, zone
             ],
         )?;
         Ok(conn.last_insert_rowid())
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn list_events(
         &self,
         camera_id: Option<i64>,
         label: Option<&str>,
         gesture: Option<&str>,
+        zone: Option<&str>,
+        after_ts: Option<i64>,
         before_ts: Option<i64>,
         limit: u32,
     ) -> Result<Vec<Event>> {
         let conn = self.conn();
         let mut stmt = conn.prepare(
             "SELECT e.id, e.camera_id, c.name, e.ts, e.label, e.score,
-                    e.x1, e.y1, e.x2, e.y2, e.snapshot, e.face, e.plate, e.gesture
+                    e.x1, e.y1, e.x2, e.y2, e.snapshot, e.face, e.plate, e.gesture, e.zone
              FROM events e JOIN cameras c ON c.id = e.camera_id
              WHERE (?1 IS NULL OR e.camera_id = ?1)
                AND (?2 IS NULL OR e.label = ?2)
                AND (?3 IS NULL OR e.gesture = ?3)
-               AND (?4 IS NULL OR e.ts < ?4)
-             ORDER BY e.ts DESC, e.id DESC LIMIT ?5",
+               AND (?4 IS NULL OR e.zone = ?4)
+               AND (?5 IS NULL OR e.ts >= ?5)
+               AND (?6 IS NULL OR e.ts < ?6)
+             ORDER BY e.ts DESC, e.id DESC LIMIT ?7",
         )?;
         let rows = stmt
             .query_map(
-                params![camera_id, label, gesture, before_ts, limit],
+                params![camera_id, label, gesture, zone, after_ts, before_ts, limit],
                 row_to_event,
             )?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -739,7 +749,7 @@ impl Db {
         let ev = conn
             .query_row(
                 "SELECT e.id, e.camera_id, c.name, e.ts, e.label, e.score,
-                        e.x1, e.y1, e.x2, e.y2, e.snapshot, e.face, e.plate, e.gesture
+                        e.x1, e.y1, e.x2, e.y2, e.snapshot, e.face, e.plate, e.gesture, e.zone
                  FROM events e JOIN cameras c ON c.id = e.camera_id WHERE e.id = ?1",
                 [id],
                 row_to_event,
@@ -1166,6 +1176,7 @@ fn row_to_event(r: &rusqlite::Row<'_>) -> rusqlite::Result<Event> {
         face: r.get(11)?,
         plate: r.get(12)?,
         gesture: r.get(13)?,
+        zone: r.get(14)?,
     })
 }
 
@@ -1229,10 +1240,13 @@ mod tests {
             None,
             None,
             None,
+            Some("driveway"),
         )
         .unwrap();
-        db.add_event(cam.id, 200, "car", 0.8, [0.0; 4], None, None, None, None)
-            .unwrap();
+        db.add_event(
+            cam.id, 200, "car", 0.8, [0.0; 4], None, None, None, None, None,
+        )
+        .unwrap();
         db.add_event(
             cam.id,
             300,
@@ -1243,24 +1257,43 @@ mod tests {
             None,
             None,
             Some("open_palm"),
+            None,
         )
         .unwrap();
 
-        assert_eq!(db.list_events(None, None, None, None, 10).unwrap().len(), 3);
+        let all = |db: &Db| {
+            db.list_events(None, None, None, None, None, None, 10)
+                .unwrap()
+        };
+        assert_eq!(all(&db).len(), 3);
         assert_eq!(
-            db.list_events(None, Some("person"), None, None, 10)
+            db.list_events(None, Some("person"), None, None, None, None, 10)
                 .unwrap()
                 .len(),
             1
         );
         assert_eq!(
-            db.list_events(None, None, Some("open_palm"), None, 10)
+            db.list_events(None, None, Some("open_palm"), None, None, None, 10)
+                .unwrap()
+                .len(),
+            1
+        );
+        // Zone filter.
+        assert_eq!(
+            db.list_events(None, None, None, Some("driveway"), None, None, 10)
+                .unwrap()
+                .len(),
+            1
+        );
+        // before / after time bounds.
+        assert_eq!(
+            db.list_events(None, None, None, None, None, Some(150), 10)
                 .unwrap()
                 .len(),
             1
         );
         assert_eq!(
-            db.list_events(None, None, None, Some(150), 10)
+            db.list_events(None, None, None, None, Some(250), None, 10)
                 .unwrap()
                 .len(),
             1
@@ -1268,10 +1301,7 @@ mod tests {
 
         // Deleting the camera cascades to its events.
         db.delete_camera(cam.id).unwrap();
-        assert!(db
-            .list_events(None, None, None, None, 10)
-            .unwrap()
-            .is_empty());
+        assert!(all(&db).is_empty());
     }
 
     #[test]
@@ -1513,7 +1543,7 @@ mod tests {
                 .unwrap();
         }
         db.add_event(
-            cam.id, 2030, "person", 0.9, [0.0; 4], None, None, None, None,
+            cam.id, 2030, "person", 0.9, [0.0; 4], None, None, None, None, None,
         )
         .unwrap();
         let mut doomed = db.eventless_segments(cam.id, 5000, 60, 15).unwrap();
