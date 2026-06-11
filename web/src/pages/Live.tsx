@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { api, AppConfig, Camera, StatusMap } from "../api";
+import { api, AppConfig, Camera, StatusMap, StreamMode, getStreamMode, setStreamMode, streamUrl } from "../api";
 import CameraDetail from "../CameraDetail";
 
 /// Hold-to-move PTZ pad, shown only on cameras that answer ONVIF PTZ.
@@ -55,6 +55,7 @@ export default function Live({
   const [status, setStatus] = useState<StatusMap>({});
   const [ptz, setPtz] = useState<Record<number, boolean>>({});
   const [detail, setDetail] = useState<Camera | null>(null);
+  const [mode, setMode] = useState<StreamMode>(getStreamMode());
 
   useEffect(() => {
     const load = () => api.status().then(setStatus).catch(() => {});
@@ -89,7 +90,24 @@ export default function Live({
 
   return (
     <>
-      <h1>Live</h1>
+      <div className="row" style={{ alignItems: "center" }}>
+        <h1 style={{ marginRight: "auto" }}>Live</h1>
+        <label className="field" title="go2rtc restreams one camera connection to all viewers; pick the transport that works best on your network.">
+          transport
+          <select
+            value={mode}
+            onChange={(e) => {
+              const m = e.target.value as StreamMode;
+              setMode(m);
+              setStreamMode(m);
+            }}
+          >
+            <option value="webrtc">WebRTC (lowest latency)</option>
+            <option value="mse">MSE (compatible, over TCP)</option>
+            <option value="mjpeg">MJPEG (most compatible)</option>
+          </select>
+        </label>
+      </div>
       <div className="live-grid">
         {live.map((cam) => {
           const s = status[String(cam.id)];
@@ -101,7 +119,8 @@ export default function Live({
               </div>
               <iframe
                 title={cam.name}
-                src={`${config.go2rtc_base}/stream.html?src=${encodeURIComponent(cam.name)}&mode=webrtc`}
+                key={mode}
+                src={streamUrl(config.go2rtc_base, cam.name, mode)}
                 allow="autoplay"
               />
               <button className="expand" title="Open camera view" onClick={() => setDetail(cam)}>

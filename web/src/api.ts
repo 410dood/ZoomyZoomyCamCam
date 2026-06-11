@@ -276,6 +276,22 @@ export const api = {
     req<Settings>("/api/settings", { method: "PUT", body: JSON.stringify(s) }),
 };
 
+// Live-view transport. go2rtc restreams a single upstream camera connection to
+// any number of clients over WebRTC / MSE / MJPEG, so this is purely a
+// per-viewer preference (no extra load on the camera).
+export type StreamMode = "webrtc" | "mse" | "mjpeg";
+
+export const getStreamMode = (): StreamMode =>
+  (localStorage.getItem("zoomy-stream-mode") as StreamMode) || "webrtc";
+export const setStreamMode = (m: StreamMode) => localStorage.setItem("zoomy-stream-mode", m);
+
+/// Build a go2rtc player URL. A comma list is a fallback priority order, so
+/// "webrtc" still degrades to MSE when UDP/WebRTC is blocked.
+export const streamUrl = (base: string, name: string, mode: StreamMode) => {
+  const order = mode === "webrtc" ? "webrtc,mse" : mode === "mse" ? "mse,webrtc" : "mjpeg";
+  return `${base}/stream.html?src=${encodeURIComponent(name)}&mode=${order}`;
+};
+
 export const fmtTime = (ts: number) => new Date(ts * 1000).toLocaleString();
 export const fmtBytes = (b: number) =>
   b > 1e9 ? `${(b / 1e9).toFixed(2)} GB` : b > 1e6 ? `${(b / 1e6).toFixed(1)} MB` : `${Math.round(b / 1e3)} KB`;

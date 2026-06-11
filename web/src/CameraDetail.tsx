@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { api, AppConfig, CamEvent, Camera, Segment, fmtTime } from "./api";
+import { api, AppConfig, CamEvent, Camera, Segment, fmtTime, getStreamMode, streamUrl } from "./api";
 import Timeline from "./Timeline";
 
 /// UniFi Protect-style camera view: large live player with the camera's own
@@ -75,7 +75,7 @@ export default function CameraDetail({
           <div className="tile" style={{ aspectRatio: "16 / 9" }}>
             <iframe
               title={camera.name}
-              src={`${config.go2rtc_base}/stream.html?src=${encodeURIComponent(camera.name)}&mode=webrtc`}
+              src={streamUrl(config.go2rtc_base, camera.name, getStreamMode())}
               allow="autoplay"
             />
             {ptz && <PtzInline cameraId={camera.id} />}
