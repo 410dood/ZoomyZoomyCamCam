@@ -170,6 +170,28 @@ export default function Settings({ onError }: { onError: (e: string) => void }) 
                 onChange={(e) => set({ face_match_threshold: num(e.target.value, s.face_match_threshold) })}
               />
             </label>
+            <label className="field" style={{ flex: 1, minWidth: 280 }} title="Plates (or partials) of interest — a match fires a guaranteed high-priority push.">
+              plate deny-list (vehicles of interest, comma-separated)
+              <input
+                type="text"
+                placeholder="B8AU77, STOLEN1"
+                value={(s.plate_denylist ?? []).join(", ")}
+                onChange={(e) =>
+                  set({ plate_denylist: e.target.value.split(",").map((x) => x.trim()).filter(Boolean) })
+                }
+              />
+            </label>
+            <label className="field" style={{ flex: 1, minWidth: 280 }} title="Known/expected plates — surfaced as 'known' in review.">
+              plate allow-list (known vehicles)
+              <input
+                type="text"
+                placeholder="MYCAR1, SPOUSE2"
+                value={(s.plate_allowlist ?? []).join(", ")}
+                onChange={(e) =>
+                  set({ plate_allowlist: e.target.value.split(",").map((x) => x.trim()).filter(Boolean) })
+                }
+              />
+            </label>
           </div>
         </div>
 
@@ -212,12 +234,71 @@ export default function Settings({ onError }: { onError: (e: string) => void }) 
                 }
               />
             </label>
+            <label className="field" title="A silent panic signal: when recognized it always fires at max push urgency (and pushes to the health ntfy topic), even if not in the armed list.">
+              duress / help signal
+              <select value={s.gesture_duress ?? ""} onChange={(e) => set({ gesture_duress: e.target.value })}>
+                <option value="">none</option>
+                {["open_palm", "fist", "victory", "point", "thumb_up", "thumb_down", "love", "ok", "call_me"].map(
+                  (g) => (
+                    <option key={g} value={g}>
+                      {g}
+                    </option>
+                  )
+                )}
+              </select>
+            </label>
             <label className="field" style={{ flex: 1, minWidth: 320 }}>
               model URL (MediaPipe .task; default = Google CDN, override to self-host offline)
               <input
                 type="text"
                 value={s.gesture_model_url ?? ""}
                 onChange={(e) => set({ gesture_model_url: e.target.value })}
+              />
+            </label>
+          </div>
+        </div>
+
+        <div className="card">
+          <h2>AI event captions (opt-in)</h2>
+          <p className="muted" style={{ marginTop: 0 }}>
+            Generate a short natural-language description of each event for review and search.
+            <b> Off by default.</b> With the default localhost Ollama URL nothing leaves this
+            machine; pointing it at a cloud endpoint sends snapshots there — that's a deliberate
+            choice you make here.
+          </p>
+          <div className="row">
+            <label className="toggle field">
+              enable captions
+              <input
+                type="checkbox"
+                checked={s.genai_enabled}
+                onChange={() => set({ genai_enabled: !s.genai_enabled })}
+              />
+            </label>
+            <label className="field" style={{ flex: 1, minWidth: 320 }}>
+              endpoint (Ollama-compatible /api/generate)
+              <input
+                type="text"
+                placeholder="http://localhost:11434/api/generate"
+                value={s.genai_url ?? ""}
+                onChange={(e) => set({ genai_url: e.target.value })}
+              />
+            </label>
+            <label className="field">
+              vision model
+              <input
+                type="text"
+                placeholder="llava"
+                value={s.genai_model ?? ""}
+                onChange={(e) => set({ genai_model: e.target.value })}
+              />
+            </label>
+            <label className="field" style={{ minWidth: 220 }}>
+              API key (cloud only; blank for local)
+              <input
+                type="password"
+                value={s.genai_api_key ?? ""}
+                onChange={(e) => set({ genai_api_key: e.target.value })}
               />
             </label>
           </div>
@@ -246,6 +327,15 @@ export default function Settings({ onError }: { onError: (e: string) => void }) 
                 onChange={(e) => set({ health_ntfy_url: e.target.value })}
               />
             </label>
+            <label className="field" style={{ flex: 1, minWidth: 320 }}>
+              public base URL (adds tap-through clip/snapshot links to pushes)
+              <input
+                type="text"
+                placeholder="https://nvr.example.com"
+                value={s.public_base_url ?? ""}
+                onChange={(e) => set({ public_base_url: e.target.value })}
+              />
+            </label>
             <label className="field" style={{ minWidth: 240 }}>
               MQTT broker (empty = off)
               <input
@@ -261,6 +351,44 @@ export default function Settings({ onError }: { onError: (e: string) => void }) 
                 type="text"
                 value={s.mqtt_prefix}
                 onChange={(e) => set({ mqtt_prefix: e.target.value })}
+              />
+            </label>
+            <label className="toggle field" title="Publish MQTT-discovery configs so Home Assistant auto-creates a binary_sensor per (camera, object) and a last-detection sensor per camera.">
+              Home Assistant discovery
+              <input
+                type="checkbox"
+                checked={s.mqtt_ha_discovery}
+                onChange={() => set({ mqtt_ha_discovery: !s.mqtt_ha_discovery })}
+              />
+            </label>
+            <label className="field">
+              HA discovery prefix
+              <input
+                type="text"
+                value={s.mqtt_ha_prefix}
+                onChange={(e) => set({ mqtt_ha_prefix: e.target.value })}
+              />
+            </label>
+            <label className="field" title="Seconds a Home Assistant binary_sensor stays ON after a detection before auto-clearing.">
+              sensor ON timeout (s)
+              <input
+                type="number" min="1"
+                value={s.mqtt_state_timeout_secs}
+                onChange={(e) => set({ mqtt_state_timeout_secs: num(e.target.value, s.mqtt_state_timeout_secs) })}
+              />
+            </label>
+          </div>
+          <div className="row" style={{ marginTop: 10 }}>
+            <label className="field" style={{ flex: 1, minWidth: 420 }}>
+              webhook body template (empty = default JSON; placeholders like{" "}
+              <code>{"{{camera}}"}</code> <code>{"{{label}}"}</code> <code>{"{{score}}"}</code>{" "}
+              <code>{"{{snapshot}}"}</code> — see docs/03)
+              <textarea
+                rows={2}
+                placeholder='{"text":"{{label}} on {{camera}} ({{score}})"}'
+                value={s.webhook_template ?? ""}
+                onChange={(e) => set({ webhook_template: e.target.value })}
+                style={{ width: "100%", fontFamily: "monospace" }}
               />
             </label>
           </div>
@@ -302,6 +430,15 @@ export default function Settings({ onError }: { onError: (e: string) => void }) 
                   set({ enhanced_retention_days: num(e.target.value, s.enhanced_retention_days) })
                 }
               />
+            </label>
+            <label className="field" title="Hardware video encoder for the enhanced-retention re-encode. Falls back to CPU automatically if unavailable.">
+              re-encode with
+              <select value={s.hwaccel ?? ""} onChange={(e) => set({ hwaccel: e.target.value })}>
+                <option value="">CPU (libx264)</option>
+                <option value="nvenc">NVIDIA NVENC</option>
+                <option value="qsv">Intel QuickSync</option>
+                <option value="videotoolbox">Apple VideoToolbox</option>
+              </select>
             </label>
             <label className="field">
               keep events (days)

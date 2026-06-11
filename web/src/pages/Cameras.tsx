@@ -1,5 +1,6 @@
 ﻿import { FormEvent, useEffect, useState } from "react";
 import { api, Camera, DetectConfig, DiscoveredCam, StatusMap, Zone } from "../api";
+import ZoneEditor from "../ZoneEditor";
 
 function TuneModal({
   camera,
@@ -17,10 +18,18 @@ function TuneModal({
     min_score: camera.detect_config.min_score,
     motion_threshold: camera.detect_config.motion_threshold,
     ignore_zones: [...camera.detect_config.ignore_zones],
+    zones: camera.detect_config.zones ? [...camera.detect_config.zones] : [],
+    privacy_masks: camera.detect_config.privacy_masks ? [...camera.detect_config.privacy_masks] : [],
+    min_area: camera.detect_config.min_area ?? null,
+    max_area: camera.detect_config.max_area ?? null,
     autotrack: camera.detect_config.autotrack ?? false,
     audio_detect: camera.detect_config.audio_detect ?? false,
     event_only_recording: camera.detect_config.event_only_recording ?? false,
     gesture_detect: camera.detect_config.gesture_detect ?? false,
+    model: camera.detect_config.model ?? null,
+    force_cpu: camera.detect_config.force_cpu ?? null,
+    poll_ms: camera.detect_config.poll_ms ?? null,
+    face_recognize: camera.detect_config.face_recognize ?? null,
   });
   const [subSource, setSubSource] = useState(camera.detect_source ?? "");
 
@@ -101,6 +110,28 @@ function TuneModal({
               }
             />
           </label>
+          <label className="field" title="Drop detections smaller than this fraction of the frame area (kills far-field blips).">
+            min object size (0-1)
+            <input
+              type="number" step="0.005" min="0" max="1"
+              value={dc.min_area ?? ""}
+              placeholder="none"
+              onChange={(e) =>
+                setDc({ ...dc, min_area: e.target.value === "" ? null : Number(e.target.value) })
+              }
+            />
+          </label>
+          <label className="field" title="Drop detections larger than this fraction of the frame area (kills whole-frame lighting flips).">
+            max object size (0-1)
+            <input
+              type="number" step="0.05" min="0" max="1"
+              value={dc.max_area ?? ""}
+              placeholder="none"
+              onChange={(e) =>
+                setDc({ ...dc, max_area: e.target.value === "" ? null : Number(e.target.value) })
+              }
+            />
+          </label>
           <label className="toggle field">
             PTZ autotrack
             <input
@@ -128,6 +159,50 @@ function TuneModal({
               onChange={() => setDc({ ...dc, gesture_detect: !dc.gesture_detect })}
             />
           </label>
+          <label className="field" title="Per-camera model override (e.g. a specialized .onnx). Empty inherits the global model.">
+            model override
+            <input
+              type="text"
+              placeholder="inherit global"
+              value={dc.model ?? ""}
+              onChange={(e) => setDc({ ...dc, model: e.target.value.trim() || null })}
+            />
+          </label>
+          <label className="field" title="Accelerator assignment for this camera's detector.">
+            accelerator
+            <select
+              value={dc.force_cpu === null ? "" : dc.force_cpu ? "cpu" : "gpu"}
+              onChange={(e) =>
+                setDc({ ...dc, force_cpu: e.target.value === "" ? null : e.target.value === "cpu" })
+              }
+            >
+              <option value="">inherit</option>
+              <option value="gpu">GPU</option>
+              <option value="cpu">CPU</option>
+            </select>
+          </label>
+          <label className="field" title="Per-camera sample-interval cap (resource governance). Only slows this camera down.">
+            FPS cap — sample every (ms)
+            <input
+              type="number" step="100" min="0"
+              placeholder="inherit"
+              value={dc.poll_ms ?? ""}
+              onChange={(e) => setDc({ ...dc, poll_ms: e.target.value === "" ? null : Number(e.target.value) })}
+            />
+          </label>
+          <label className="field" title="Opt this camera into (or out of) face recognition. Inherit uses the global Settings switch.">
+            face recognition
+            <select
+              value={dc.face_recognize === null ? "" : dc.face_recognize ? "on" : "off"}
+              onChange={(e) =>
+                setDc({ ...dc, face_recognize: e.target.value === "" ? null : e.target.value === "on" })
+              }
+            >
+              <option value="">inherit</option>
+              <option value="on">on</option>
+              <option value="off">off</option>
+            </select>
+          </label>
           <label
             className="toggle field"
             title="Keep only footage near events: segments with no detection within a segment-length margin are deleted after a 15-minute grace period. Saves most of the disk on quiet cameras."
@@ -141,10 +216,24 @@ function TuneModal({
           </label>
         </div>
 
-        <h2 style={{ marginTop: 18 }}>Ignore zones</h2>
+        <h2 style={{ marginTop: 18 }}>Zones &amp; privacy masks</h2>
         <p className="muted" style={{ marginTop: 0 }}>
-          Detections whose center falls inside a zone are dropped. Coordinates are fractions of
-          the frame (0–1) from the top-left.
+          Draw polygons on the live frame. <b style={{ color: "#36d399" }}>Required</b> zones keep
+          only objects inside them; <b style={{ color: "#f87272" }}>ignore</b> zones drop objects
+          inside; <b style={{ color: "#a3a3a3" }}>privacy masks</b> are blacked out before any
+          analysis or snapshot (continuous recordings are not masked).
+        </p>
+        <ZoneEditor
+          camera={camera}
+          zones={dc.zones}
+          masks={dc.privacy_masks}
+          onChange={(zones, masks) => setDc({ ...dc, zones, privacy_masks: masks })}
+        />
+
+        <h2 style={{ marginTop: 18 }}>Ignore zones (legacy rectangles)</h2>
+        <p className="muted" style={{ marginTop: 0 }}>
+          Detections whose center falls inside a rectangle are dropped. Coordinates are fractions of
+          the frame (0–1) from the top-left. Prefer the polygon zones above for new setups.
         </p>
         {dc.ignore_zones.map((z, i) => (
           <div className="row" key={i} style={{ marginBottom: 8 }}>
@@ -396,6 +485,7 @@ export default function Cameras({
                 <th>Enabled</th>
                 <th>Detect</th>
                 <th>Record</th>
+                <th>Perf</th>
                 <th></th>
               </tr>
             </thead>
@@ -429,6 +519,13 @@ export default function Cameras({
                       </span>
                     </td>
                   ))}
+                  <td className="muted" style={{ whiteSpace: "nowrap" }}>
+                    {(() => {
+                      const s = status[String(cam.id)];
+                      if (!s?.accelerator) return "—";
+                      return `${s.inference_ms != null ? s.inference_ms.toFixed(1) + "ms · " : ""}${s.accelerator}`;
+                    })()}
+                  </td>
                   <td>
                     <button className="ghost" onClick={() => setTuning(cam)} style={{ marginRight: 8 }}>
                       Tune

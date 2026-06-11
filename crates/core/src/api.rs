@@ -30,6 +30,9 @@ pub struct AppState {
     /// Lets request handlers (the hand-signal recognizer) publish events and
     /// fire alarm actions on the same channel the detection pipeline uses.
     pub mqtt_tx: std::sync::mpsc::Sender<crate::mqtt::EventMsg>,
+    /// Shared per-rule cooldown clock, so API-fired alarms respect the same
+    /// throttle as pipeline/audio-fired ones.
+    pub alarm_throttle: crate::notify::AlarmThrottle,
 }
 
 pub fn router(state: AppState) -> Router {
@@ -48,6 +51,7 @@ pub fn router(state: AppState) -> Router {
             get(get_camera).patch(patch_camera).delete(delete_camera),
         )
         .route("/api/cameras/{id}/ptz", get(ptz_caps).post(ptz_command))
+        .route("/api/cameras/{id}/frame.jpg", get(camera_frame))
         .route("/api/events", get(list_events))
         .route("/api/gesture", axum::routing::post(record_gesture))
         .route("/api/events/{id}/clip", get(event_clip))
@@ -58,7 +62,10 @@ pub fn router(state: AppState) -> Router {
             axum::routing::patch(patch_alarm_api).delete(delete_alarm_api),
         )
         .route("/api/faces", get(faces_overview).post(enroll_face))
-        .route("/api/faces/{id}", axum::routing::delete(delete_face_api))
+        .route(
+            "/api/faces/{id}",
+            axum::routing::patch(rename_face_api).delete(delete_face_api),
+        )
         .route("/api/faces/unknown/{file}", get(unknown_face_img))
         .route("/api/snapshots/{file}", get(snapshot))
         .route("/api/recordings", get(list_recordings))
@@ -127,6 +134,9 @@ async fn camera_status(State(st): State<AppState>) -> ApiResult<Json<serde_json:
                 "recording": h.recording,
                 "last_frame_ts": h.last_frame_ts,
                 "last_error": h.last_error,
+                "inference_ms": h.inference_ms,
+                "accelerator": h.accelerator,
+                "model": h.model,
             }),
         );
     }
@@ -360,6 +370,25 @@ async fn patch_camera(
                 return Err(bad_request("zone coordinates must be fractions 0..1"));
             }
         }
+        let in_unit = |p: &[f32; 2]| (0.0..=1.0).contains(&p[0]) && (0.0..=1.0).contains(&p[1]);
+        for z in &dc.zones {
+            if z.points.len() < 3 {
+                return Err(bad_request("a polygon zone needs at least 3 points"));
+            }
+            if !z.points.iter().all(in_unit) {
+                return Err(bad_request("zone points must be fractions 0..1"));
+            }
+        }
+        for m in &dc.privacy_masks {
+            if m.len() < 3 || !m.iter().all(in_unit) {
+                return Err(bad_request("a privacy mask needs ≥3 points in 0..1"));
+            }
+        }
+        for a in [dc.min_area, dc.max_area].into_iter().flatten() {
+            if !(0.0..=1.0).contains(&a) {
+                return Err(bad_request("object-size bounds must be fractions 0..1"));
+            }
+        }
         cam.detect_config = dc;
     }
     st.db.update_camera(&cam)?;
@@ -434,6 +463,29 @@ async fn ptz_command(
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
+/// Proxy the camera's current decoded frame from go2rtc as a same-origin JPEG.
+/// The zone/mask editor draws on top of this still; serving it through the core
+/// API avoids the cross-origin taint that blocks reading go2rtc pixels directly.
+async fn camera_frame(State(st): State<AppState>, Path(id): Path<i64>) -> ApiResult<Response> {
+    let cam = st.db.get_camera(id)?.ok_or_else(not_found)?;
+    let url = format!("{}/api/frame.jpeg?src={}", st.go2rtc.api_base(), cam.name);
+    let bytes = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<u8>> {
+        use std::io::Read as _;
+        let resp = ureq::get(&url)
+            .timeout(std::time::Duration::from_secs(5))
+            .call()?;
+        let mut buf = Vec::new();
+        resp.into_reader()
+            .take(32 * 1024 * 1024)
+            .read_to_end(&mut buf)?;
+        Ok(buf)
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(|e| ApiError(StatusCode::BAD_GATEWAY, format!("{e:#}")))?;
+    Ok(([(axum::http::header::CONTENT_TYPE, "image/jpeg")], bytes).into_response())
+}
+
 // --- events ----------------------------------------------------------------
 
 #[derive(Deserialize)]
@@ -441,6 +493,8 @@ struct EventQuery {
     camera_id: Option<i64>,
     label: Option<String>,
     gesture: Option<String>,
+    zone: Option<String>,
+    after: Option<i64>,
     before: Option<i64>,
     #[serde(default = "default_limit")]
     limit: u32,
@@ -458,6 +512,8 @@ async fn list_events(
         q.camera_id,
         q.label.as_deref(),
         q.gesture.as_deref(),
+        q.zone.as_deref(),
+        q.after,
         q.before,
         q.limit.min(1000),
     )?))
@@ -488,8 +544,12 @@ async fn record_gesture(
     }
     let canonical = gesture::canonical(&req.gesture)
         .ok_or_else(|| bad_request(format!("unknown gesture {:?}", req.gesture)))?;
-    // Honor the armed-gesture filter (empty = any recognized signal counts).
-    if !settings.gesture_labels.is_empty()
+    // The duress/help signal always fires (even if not in the armed list) —
+    // it's a panic button, so it must never be filtered out.
+    let is_duress = !settings.gesture_duress.is_empty() && canonical == settings.gesture_duress;
+    // Otherwise honor the armed-gesture filter (empty = any recognized signal).
+    if !is_duress
+        && !settings.gesture_labels.is_empty()
         && !settings.gesture_labels.iter().any(|g| g == canonical)
     {
         return Ok(Json(
@@ -533,6 +593,7 @@ async fn record_gesture(
         None,
         None,
         Some(canonical),
+        None,
     )?;
     tracing::info!(camera = %cam.name, gesture = canonical, event = id, "hand signal recorded");
 
@@ -557,10 +618,16 @@ async fn record_gesture(
         .db
         .list_alarms()?
         .into_iter()
-        .filter(|r| r.matches(cam.id, "gesture", score, None, None, Some(canonical)))
+        .filter(|r| {
+            r.matches(cam.id, "gesture", score, None, None, Some(canonical))
+                && crate::notify::ready(r, &st.alarm_throttle, now)
+        })
         .collect();
     let mqtt_tx = st.mqtt_tx.clone();
     let webhook_url = settings.webhook_url.clone();
+    let base_url = settings.public_base_url.clone();
+    let webhook_template = settings.webhook_template.clone();
+    let health_ntfy = settings.health_ntfy_url.clone();
     let camera = cam.name.clone();
     let gesture_owned = canonical.to_string();
     let snap_path = snapshot.as_ref().map(|_| snap_abs.clone());
@@ -576,21 +643,40 @@ async fn record_gesture(
             face: None,
             plate: None,
             gesture: Some(&gesture_owned),
+            base_url: &base_url,
+            webhook_template: &webhook_template,
+            duress: is_duress,
         };
+        // Guaranteed panic path: a duress signal pushes straight to the health
+        // ntfy topic at max urgency, even if no alarm rule is configured.
+        if is_duress && !health_ntfy.is_empty() {
+            crate::notify::ntfy_text(
+                &health_ntfy,
+                &format!("🚨 DURESS signal on {camera}"),
+                &format!("Hand-signal panic button triggered on {camera}"),
+                "warning,rotating_light,sos",
+            );
+        }
         if !webhook_url.is_empty() {
-            let payload = serde_json::json!({
-                "type": "gesture",
-                "event_id": id,
-                "camera": camera,
-                "label": "gesture",
-                "gesture": gesture_owned,
-                "score": score,
-                "ts": now,
-                "snapshot": ev.snapshot_url,
-            });
+            let body = if webhook_template.is_empty() {
+                serde_json::json!({
+                    "type": "gesture",
+                    "event_id": id,
+                    "camera": camera,
+                    "label": "gesture",
+                    "gesture": gesture_owned,
+                    "score": score,
+                    "ts": now,
+                    "snapshot": ev.snapshot_url,
+                })
+                .to_string()
+            } else {
+                crate::notify::render_template(&webhook_template, &ev)
+            };
             if let Err(e) = ureq::post(&webhook_url)
                 .timeout(std::time::Duration::from_secs(3))
-                .send_json(payload)
+                .set("Content-Type", "application/json")
+                .send_string(&body)
             {
                 tracing::debug!("gesture webhook failed: {e}");
             }
@@ -605,6 +691,7 @@ async fn record_gesture(
         "event_id": id,
         "gesture": canonical,
         "camera": cam.name,
+        "duress": is_duress,
     })))
 }
 
@@ -698,9 +785,17 @@ async fn event_clip(
     Ok(resp)
 }
 
+#[derive(Deserialize)]
+struct ThumbQuery {
+    /// Resize the snapshot to this width (px) for grid thumbnails. Cached under
+    /// snapshots/thumbs. Clamped to 64..=1280.
+    w: Option<u32>,
+}
+
 async fn snapshot(
     State(st): State<AppState>,
     Path(file): Path<String>,
+    Query(q): Query<ThumbQuery>,
     req: Request,
 ) -> ApiResult<Response> {
     // Snapshot names are generated by us ({camera}-{ts}.jpg); reject traversal.
@@ -710,6 +805,34 @@ async fn snapshot(
     let path = st.snapshots_dir.join(&file);
     if !path.exists() {
         return Err(not_found());
+    }
+    // Thumbnail request: serve (and cache) a width-resized JPEG.
+    if let Some(w) = q.w {
+        let w = w.clamp(64, 1280);
+        let thumb_dir = st.snapshots_dir.join("thumbs");
+        let thumb_path = thumb_dir.join(format!("{w}-{file}"));
+        if !thumb_path.exists() {
+            let src = path.clone();
+            let out = thumb_path.clone();
+            tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+                std::fs::create_dir_all(&thumb_dir).ok();
+                let img = image::open(&src)?;
+                let h = (w as f32 * img.height() as f32 / img.width().max(1) as f32) as u32;
+                img.resize(w, h.max(1), image::imageops::FilterType::Triangle)
+                    .save_with_format(&out, image::ImageFormat::Jpeg)?;
+                Ok(())
+            })
+            .await
+            .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+            // If resizing fails, fall back to the full image below.
+            .ok();
+        }
+        if thumb_path.exists() {
+            return Ok(ServeFile::new(thumb_path)
+                .oneshot(req)
+                .await
+                .into_response());
+        }
     }
     Ok(ServeFile::new(path).oneshot(req).await.into_response())
 }
@@ -736,6 +859,12 @@ async fn add_alarm_api(
     if rule.days.iter().any(|d| *d > 6) {
         return Err(bad_request("days must be 0 (Sunday) through 6 (Saturday)"));
     }
+    if rule.priority > 5 {
+        return Err(bad_request("priority must be 0 (default) through 5"));
+    }
+    if rule.cooldown_secs < 0 {
+        return Err(bad_request("cooldown must be ≥ 0 seconds"));
+    }
     for t in [&rule.start_hhmm, &rule.end_hhmm].into_iter().flatten() {
         let ok = t.split_once(':').is_some_and(|(h, m)| {
             h.parse::<u8>().is_ok_and(|h| h < 24) && m.parse::<u8>().is_ok_and(|m| m < 60)
@@ -750,7 +879,9 @@ async fn add_alarm_api(
 
 #[derive(Deserialize)]
 struct AlarmPatch {
-    enabled: bool,
+    enabled: Option<bool>,
+    /// Snooze the rule for this many seconds from now; 0 clears the snooze.
+    snooze_secs: Option<i64>,
 }
 
 async fn patch_alarm_api(
@@ -758,7 +889,17 @@ async fn patch_alarm_api(
     Path(id): Path<i64>,
     Json(p): Json<AlarmPatch>,
 ) -> ApiResult<StatusCode> {
-    st.db.set_alarm_enabled(id, p.enabled)?;
+    if let Some(enabled) = p.enabled {
+        st.db.set_alarm_enabled(id, enabled)?;
+    }
+    if let Some(secs) = p.snooze_secs {
+        let until = if secs <= 0 {
+            0
+        } else {
+            chrono::Local::now().timestamp() + secs
+        };
+        st.db.set_alarm_snooze(id, until)?;
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -881,6 +1022,24 @@ async fn enroll_face(
 
 async fn delete_face_api(State(st): State<AppState>, Path(id): Path<i64>) -> ApiResult<StatusCode> {
     st.db.delete_face(id)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+struct RenameReq {
+    name: String,
+}
+
+async fn rename_face_api(
+    State(st): State<AppState>,
+    Path(id): Path<i64>,
+    Json(req): Json<RenameReq>,
+) -> ApiResult<StatusCode> {
+    let name = req.name.trim();
+    if name.is_empty() || name.len() > 64 {
+        return Err(bad_request("name must be 1-64 characters"));
+    }
+    st.db.rename_face(id, name)?;
     Ok(StatusCode::NO_CONTENT)
 }
 

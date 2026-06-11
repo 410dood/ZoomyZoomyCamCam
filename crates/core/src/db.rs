@@ -51,6 +51,66 @@ impl Zone {
     }
 }
 
+/// What a polygon zone does to detections whose anchor point falls inside it.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ZoneKind {
+    /// Drop matching detections inside the zone (e.g. a public sidewalk).
+    #[default]
+    Ignore,
+    /// Only keep matching detections that fall inside *some* required zone
+    /// (e.g. only alert on people actually on the driveway).
+    Required,
+}
+
+/// An arbitrary polygon zone in frame-fraction coordinates (0..1), so it
+/// survives resolution changes and sub-stream switches. Rectangles are just a
+/// 4-point special case — this supersedes [`Zone`] for new cameras while old
+/// rectangle `ignore_zones` keep working.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct PolyZone {
+    pub name: String,
+    /// Polygon vertices as [x, y] fractions, in order. Needs ≥3 to have area.
+    pub points: Vec<[f32; 2]>,
+    pub kind: ZoneKind,
+    /// Object labels this zone applies to; empty = every object.
+    pub labels: Vec<String>,
+}
+
+impl PolyZone {
+    /// Even-odd ray-casting point-in-polygon test (point in frame fractions).
+    pub fn contains(&self, fx: f32, fy: f32) -> bool {
+        point_in_polygon(&self.points, fx, fy)
+    }
+
+    /// Does this zone govern detections of `label`? (Empty `labels` = all.)
+    pub fn applies_to(&self, label: &str) -> bool {
+        self.labels.is_empty() || self.labels.iter().any(|l| l == label)
+    }
+}
+
+/// Even-odd ray-casting point-in-polygon. Returns false for degenerate
+/// polygons (< 3 vertices).
+pub fn point_in_polygon(poly: &[[f32; 2]], x: f32, y: f32) -> bool {
+    if poly.len() < 3 {
+        return false;
+    }
+    let mut inside = false;
+    let mut j = poly.len() - 1;
+    for i in 0..poly.len() {
+        let (xi, yi) = (poly[i][0], poly[i][1]);
+        let (xj, yj) = (poly[j][0], poly[j][1]);
+        let intersects =
+            ((yi > y) != (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi + f32::EPSILON) + xi);
+        if intersects {
+            inside = !inside;
+        }
+        j = i;
+    }
+    inside
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct DetectConfig {
@@ -62,8 +122,22 @@ pub struct DetectConfig {
     /// Override of the global motion threshold; `None` inherits.
     pub motion_threshold: Option<f32>,
     /// Detections whose box center falls in any of these are dropped —
-    /// e.g. a busy street at the edge of a driveway camera.
+    /// e.g. a busy street at the edge of a driveway camera. Legacy rectangles;
+    /// new cameras use `zones` (polygons). Both are honored.
     pub ignore_zones: Vec<Zone>,
+    /// Polygon zones (required / ignore), the richer successor to
+    /// `ignore_zones`. A `Required` zone makes detections valid only when their
+    /// anchor lands inside one; `Ignore` zones drop them.
+    pub zones: Vec<PolyZone>,
+    /// Polygon privacy masks: these regions are blacked out of the frame before
+    /// motion, detection and snapshots — nothing inside is analyzed or stored.
+    /// (Continuous recordings are packet-copied and are not masked.)
+    pub privacy_masks: Vec<Vec<[f32; 2]>>,
+    /// Object-size gate as a fraction of frame area (0..1). Detections smaller
+    /// than `min_area` or larger than `max_area` are dropped — kills tiny
+    /// far-field blips and whole-frame lighting flips. `None` = no bound.
+    pub min_area: Option<f32>,
+    pub max_area: Option<f32>,
     /// PTZ autotracking (Frigate-style): steer the camera to keep tracked
     /// objects centered. Only effective on ONVIF PTZ-capable cameras.
     pub autotrack: bool,
@@ -76,6 +150,20 @@ pub struct DetectConfig {
     /// Offer the live hand-signal overlay for this camera (the Signals page can
     /// attribute recognized gestures to it). Detection itself runs client-side.
     pub gesture_detect: bool,
+    /// Per-camera model override (e.g. a specialized .onnx); `None` inherits the
+    /// global model. Lets different cameras run different detectors.
+    pub model: Option<String>,
+    /// Per-camera accelerator assignment: force this camera's detector onto CPU
+    /// (`Some(true)`) or the GPU (`Some(false)`); `None` inherits the global
+    /// setting. Useful to keep a low-priority camera off a busy GPU.
+    pub force_cpu: Option<bool>,
+    /// Per-camera sample interval cap in ms (resource governance / FPS cap);
+    /// `None` uses the global poll interval. Only ever slows a camera down.
+    pub poll_ms: Option<u64>,
+    /// Per-camera face-recognition opt-in: `Some(true/false)` overrides the
+    /// global switch, `None` inherits it. Lets you enable face matching only on
+    /// the cameras where it's wanted (e.g. the front door).
+    pub face_recognize: Option<bool>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -98,6 +186,11 @@ pub struct Event {
     /// Recognized hand signal (e.g. "open_palm", "victory"), when the event
     /// came from the hand-signal recognizer.
     pub gesture: Option<String>,
+    /// Name of the detection zone the object was in, when it fell inside a
+    /// named polygon zone (used for review filtering).
+    pub zone: Option<String>,
+    /// Natural-language description from the optional GenAI captioner.
+    pub caption: Option<String>,
 }
 
 /// Alarm Manager rule (UniFi style if-this-then-that): all set conditions
@@ -136,6 +229,16 @@ pub struct AlarmRule {
     pub start_hhmm: Option<String>,
     #[serde(default)]
     pub end_hhmm: Option<String>,
+    /// Minimum seconds between firings of this rule — the per-rule anti-fatigue
+    /// throttle. 0 = no cooldown.
+    #[serde(default)]
+    pub cooldown_secs: i64,
+    /// ntfy priority 1 (min) .. 5 (max); 0 = leave at the ntfy default (3).
+    #[serde(default)]
+    pub priority: u8,
+    /// Suppress the rule until this unix timestamp (manual "snooze"). 0 = off.
+    #[serde(default)]
+    pub snooze_until: i64,
     #[serde(default)]
     pub created_ts: i64,
 }
@@ -279,6 +382,10 @@ pub struct Settings {
     /// Enhanced retention (UniFi-style): segments older than this many days
     /// are re-encoded to space-saving quality. 0 = off.
     pub enhanced_retention_days: u32,
+    /// Hardware video encoder for the enhanced-retention re-encode: "" / "cpu"
+    /// (libx264), "nvenc" (NVIDIA), "qsv" (Intel QuickSync), or "videotoolbox"
+    /// (Apple). Falls back to CPU automatically if the HW encoder fails.
+    pub hwaccel: String,
     /// Where new recordings go (any drive or UNC share); empty = the default
     /// data/recordings. Existing segments keep playing from where they are.
     pub recordings_dir: String,
@@ -298,6 +405,18 @@ pub struct Settings {
     pub mqtt_url: String,
     /// Topic prefix for MQTT publishes.
     pub mqtt_prefix: String,
+    /// Publish Home Assistant MQTT-discovery configs so HA auto-creates a
+    /// binary_sensor per (camera, object) and a last-detection sensor per camera.
+    pub mqtt_ha_discovery: bool,
+    /// HA discovery topic prefix (HA's default is "homeassistant").
+    pub mqtt_ha_prefix: String,
+    /// Seconds a discovery binary_sensor stays "ON" after a detection before it
+    /// is auto-cleared to "OFF".
+    pub mqtt_state_timeout_secs: u64,
+    /// Optional webhook body template. Empty = the default detection JSON.
+    /// Placeholders: {{event_id}} {{camera}} {{label}} {{score}} {{ts}}
+    /// {{snapshot}} {{face}} {{plate}} {{gesture}} (unknowns render empty).
+    pub webhook_template: String,
     /// Run face recognition on person detections (needs the two face models
     /// on disk; silently inactive when they are missing).
     pub face_recognition: bool,
@@ -306,6 +425,11 @@ pub struct Settings {
     pub face_match_threshold: f32,
     pub face_det_model: String,
     pub face_rec_model: String,
+    /// License plates of interest (substring match, case-insensitive). A read
+    /// that matches fires a guaranteed high-priority "vehicle of interest" push.
+    pub plate_denylist: Vec<String>,
+    /// Known/expected plates (substring match) — surfaced as "known" in review.
+    pub plate_allowlist: Vec<String>,
     /// AudioSet display names (yamnet_class_map.csv) that produce events.
     pub audio_labels: Vec<String>,
     /// Mean YAMNet score required to fire an audio event.
@@ -313,6 +437,10 @@ pub struct Settings {
     /// ntfy topic URL for camera health pushes (offline / back online);
     /// empty = off.
     pub health_ntfy_url: String,
+    /// Public base URL this NVR is reachable at (e.g. "https://nvr.example.com").
+    /// When set, push notifications include tap-through links to the event clip
+    /// and snapshot. Empty = no links (the LAN default).
+    pub public_base_url: String,
     /// Master switch for the live hand-signal recognizer (the Signals page).
     pub gesture_recognition: bool,
     /// How long (seconds) a hand signal must be held before it fires an event —
@@ -321,9 +449,23 @@ pub struct Settings {
     /// Canonical gesture names that produce events (see the `gesture` crate's
     /// taxonomy). Empty = every recognized signal.
     pub gesture_labels: Vec<String>,
+    /// A "duress"/help hand signal. When this signal is recognized, the gesture
+    /// event is flagged high-priority and pushes go out at max urgency with a
+    /// distinct tag — a silent panic button. Empty = no duress signal.
+    pub gesture_duress: String,
     /// MediaPipe gesture-recognizer task bundle the browser loads. Defaults to
     /// Google's CDN; point it at a self-hosted copy for fully offline use.
     pub gesture_model_url: String,
+    /// Explicit opt-in for GenAI event captions. OFF by default — nothing is
+    /// ever sent to an LLM until this is enabled. With a localhost Ollama URL it
+    /// stays fully local; pointing it at a cloud endpoint sends snapshots there.
+    pub genai_enabled: bool,
+    /// Ollama-compatible generate endpoint (default local Ollama).
+    pub genai_url: String,
+    /// Vision model used for captioning (e.g. "llava", "llama3.2-vision").
+    pub genai_model: String,
+    /// Optional bearer token (for cloud/proxied endpoints). Empty for local Ollama.
+    pub genai_api_key: String,
 }
 
 impl Default for Settings {
@@ -351,6 +493,7 @@ impl Default for Settings {
             retention_gb: 50,
             event_retention_days: 30,
             enhanced_retention_days: 0,
+            hwaccel: String::new(),
             recordings_dir: String::new(),
             model_path: "yolov8n.onnx".into(),
             force_cpu: false,
@@ -360,6 +503,10 @@ impl Default for Settings {
             alert_labels: ["person"].map(String::from).to_vec(),
             mqtt_url: String::new(),
             mqtt_prefix: "zoomy".into(),
+            mqtt_ha_discovery: true,
+            mqtt_ha_prefix: "homeassistant".into(),
+            mqtt_state_timeout_secs: 30,
+            webhook_template: String::new(),
             face_recognition: true,
             face_match_threshold: 0.4,
             face_det_model: "det_10g.onnx".into(),
@@ -381,15 +528,23 @@ impl Default for Settings {
             .map(String::from)
             .to_vec(),
             audio_threshold: 0.4,
+            plate_denylist: Vec::new(),
+            plate_allowlist: Vec::new(),
             health_ntfy_url: String::new(),
+            public_base_url: String::new(),
             gesture_recognition: true,
             gesture_hold_secs: 1.5,
             gesture_labels: ["open_palm", "victory", "thumb_up"]
                 .map(String::from)
                 .to_vec(),
+            gesture_duress: String::new(),
             gesture_model_url: "https://storage.googleapis.com/mediapipe-models/\
                 gesture_recognizer/gesture_recognizer/float16/1/gesture_recognizer.task"
                 .into(),
+            genai_enabled: false,
+            genai_url: "http://localhost:11434/api/generate".into(),
+            genai_model: "llava".into(),
+            genai_api_key: String::new(),
         }
     }
 }
@@ -442,6 +597,8 @@ impl Db {
         let _ = conn.execute("ALTER TABLE events ADD COLUMN face TEXT", []);
         let _ = conn.execute("ALTER TABLE events ADD COLUMN plate TEXT", []);
         let _ = conn.execute("ALTER TABLE events ADD COLUMN gesture TEXT", []);
+        let _ = conn.execute("ALTER TABLE events ADD COLUMN zone TEXT", []);
+        let _ = conn.execute("ALTER TABLE events ADD COLUMN caption TEXT", []);
         let _ = conn.execute(
             "ALTER TABLE segments ADD COLUMN reduced INTEGER NOT NULL DEFAULT 0",
             [],
@@ -474,6 +631,18 @@ impl Db {
         // Additive migration for pre-schedule alarms tables.
         let _ = conn.execute("ALTER TABLE alarms ADD COLUMN schedule_json TEXT", []);
         let _ = conn.execute("ALTER TABLE alarms ADD COLUMN gesture_like TEXT", []);
+        let _ = conn.execute(
+            "ALTER TABLE alarms ADD COLUMN cooldown_secs INTEGER NOT NULL DEFAULT 0",
+            [],
+        );
+        let _ = conn.execute(
+            "ALTER TABLE alarms ADD COLUMN priority INTEGER NOT NULL DEFAULT 0",
+            [],
+        );
+        let _ = conn.execute(
+            "ALTER TABLE alarms ADD COLUMN snooze_until INTEGER NOT NULL DEFAULT 0",
+            [],
+        );
         Ok(Self(Arc::new(Mutex::new(conn))))
     }
 
@@ -576,41 +745,47 @@ impl Db {
         face: Option<&str>,
         plate: Option<&str>,
         gesture: Option<&str>,
+        zone: Option<&str>,
     ) -> Result<i64> {
         let conn = self.conn();
         conn.execute(
-            "INSERT INTO events (camera_id, ts, label, score, x1, y1, x2, y2, snapshot, face, plate, gesture)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            "INSERT INTO events (camera_id, ts, label, score, x1, y1, x2, y2, snapshot, face, plate, gesture, zone)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             params![
                 camera_id, ts, label, score, bbox[0], bbox[1], bbox[2], bbox[3], snapshot, face,
-                plate, gesture
+                plate, gesture, zone
             ],
         )?;
         Ok(conn.last_insert_rowid())
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn list_events(
         &self,
         camera_id: Option<i64>,
         label: Option<&str>,
         gesture: Option<&str>,
+        zone: Option<&str>,
+        after_ts: Option<i64>,
         before_ts: Option<i64>,
         limit: u32,
     ) -> Result<Vec<Event>> {
         let conn = self.conn();
         let mut stmt = conn.prepare(
             "SELECT e.id, e.camera_id, c.name, e.ts, e.label, e.score,
-                    e.x1, e.y1, e.x2, e.y2, e.snapshot, e.face, e.plate, e.gesture
+                    e.x1, e.y1, e.x2, e.y2, e.snapshot, e.face, e.plate, e.gesture, e.zone, e.caption
              FROM events e JOIN cameras c ON c.id = e.camera_id
              WHERE (?1 IS NULL OR e.camera_id = ?1)
                AND (?2 IS NULL OR e.label = ?2)
                AND (?3 IS NULL OR e.gesture = ?3)
-               AND (?4 IS NULL OR e.ts < ?4)
-             ORDER BY e.ts DESC, e.id DESC LIMIT ?5",
+               AND (?4 IS NULL OR e.zone = ?4)
+               AND (?5 IS NULL OR e.ts >= ?5)
+               AND (?6 IS NULL OR e.ts < ?6)
+             ORDER BY e.ts DESC, e.id DESC LIMIT ?7",
         )?;
         let rows = stmt
             .query_map(
-                params![camera_id, label, gesture, before_ts, limit],
+                params![camera_id, label, gesture, zone, after_ts, before_ts, limit],
                 row_to_event,
             )?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -622,7 +797,7 @@ impl Db {
         let ev = conn
             .query_row(
                 "SELECT e.id, e.camera_id, c.name, e.ts, e.label, e.score,
-                        e.x1, e.y1, e.x2, e.y2, e.snapshot, e.face, e.plate, e.gesture
+                        e.x1, e.y1, e.x2, e.y2, e.snapshot, e.face, e.plate, e.gesture, e.zone, e.caption
                  FROM events e JOIN cameras c ON c.id = e.camera_id WHERE e.id = ?1",
                 [id],
                 row_to_event,
@@ -641,8 +816,9 @@ impl Db {
         let conn = self.conn();
         conn.execute(
             "INSERT INTO alarms (name, enabled, camera_id, label, face_like, plate_like,
-             gesture_like, min_score, action, target, schedule_json, created_ts)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+             gesture_like, min_score, action, target, schedule_json, cooldown_secs, priority,
+             snooze_until, created_ts)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
             params![
                 r.name,
                 r.enabled,
@@ -655,6 +831,9 @@ impl Db {
                 r.action,
                 r.target,
                 schedule,
+                r.cooldown_secs,
+                r.priority,
+                r.snooze_until,
                 chrono::Local::now().timestamp()
             ],
         )?;
@@ -665,7 +844,8 @@ impl Db {
         let conn = self.conn();
         let mut stmt = conn.prepare(
             "SELECT id, name, enabled, camera_id, label, face_like, plate_like,
-                    min_score, action, target, created_ts, schedule_json, gesture_like
+                    min_score, action, target, created_ts, schedule_json, gesture_like,
+                    cooldown_secs, priority, snooze_until
              FROM alarms ORDER BY id",
         )?;
         let rows = stmt
@@ -698,6 +878,9 @@ impl Db {
                         .unwrap_or_default(),
                     start_hhmm: sched["start"].as_str().map(str::to_string),
                     end_hhmm: sched["end"].as_str().map(str::to_string),
+                    cooldown_secs: r.get(13)?,
+                    priority: r.get::<_, i64>(14)? as u8,
+                    snooze_until: r.get(15)?,
                     created_ts: r.get(10)?,
                 })
             })?
@@ -741,6 +924,15 @@ impl Db {
         Ok(())
     }
 
+    /// Suppress a rule until `until` (unix seconds); 0 clears the snooze.
+    pub fn set_alarm_snooze(&self, id: i64, until: i64) -> Result<()> {
+        self.conn().execute(
+            "UPDATE alarms SET snooze_until=?1 WHERE id=?2",
+            params![until, id],
+        )?;
+        Ok(())
+    }
+
     pub fn delete_alarm(&self, id: i64) -> Result<()> {
         self.conn()
             .execute("DELETE FROM alarms WHERE id=?1", [id])?;
@@ -748,6 +940,15 @@ impl Db {
     }
 
     // --- smart-search embeddings -------------------------------------------
+
+    /// Store a GenAI caption for an event (best-effort enrichment).
+    pub fn set_event_caption(&self, event_id: i64, caption: &str) -> Result<()> {
+        self.conn().execute(
+            "UPDATE events SET caption = ?1 WHERE id = ?2",
+            params![caption, event_id],
+        )?;
+        Ok(())
+    }
 
     pub fn set_event_embedding(&self, event_id: i64, embedding: &[f32]) -> Result<()> {
         let bytes: Vec<u8> = embedding.iter().flat_map(|f| f.to_le_bytes()).collect();
@@ -811,6 +1012,13 @@ impl Db {
 
     pub fn delete_face(&self, id: i64) -> Result<()> {
         self.conn().execute("DELETE FROM faces WHERE id=?1", [id])?;
+        Ok(())
+    }
+
+    /// Rename an enrolled identity (relabel all its embeddings at once).
+    pub fn rename_face(&self, id: i64, name: &str) -> Result<()> {
+        self.conn()
+            .execute("UPDATE faces SET name=?1 WHERE id=?2", params![name, id])?;
         Ok(())
     }
 
@@ -1032,6 +1240,8 @@ fn row_to_event(r: &rusqlite::Row<'_>) -> rusqlite::Result<Event> {
         face: r.get(11)?,
         plate: r.get(12)?,
         gesture: r.get(13)?,
+        zone: r.get(14)?,
+        caption: r.get(15)?,
     })
 }
 
@@ -1095,10 +1305,13 @@ mod tests {
             None,
             None,
             None,
+            Some("driveway"),
         )
         .unwrap();
-        db.add_event(cam.id, 200, "car", 0.8, [0.0; 4], None, None, None, None)
-            .unwrap();
+        db.add_event(
+            cam.id, 200, "car", 0.8, [0.0; 4], None, None, None, None, None,
+        )
+        .unwrap();
         db.add_event(
             cam.id,
             300,
@@ -1109,24 +1322,43 @@ mod tests {
             None,
             None,
             Some("open_palm"),
+            None,
         )
         .unwrap();
 
-        assert_eq!(db.list_events(None, None, None, None, 10).unwrap().len(), 3);
+        let all = |db: &Db| {
+            db.list_events(None, None, None, None, None, None, 10)
+                .unwrap()
+        };
+        assert_eq!(all(&db).len(), 3);
         assert_eq!(
-            db.list_events(None, Some("person"), None, None, 10)
+            db.list_events(None, Some("person"), None, None, None, None, 10)
                 .unwrap()
                 .len(),
             1
         );
         assert_eq!(
-            db.list_events(None, None, Some("open_palm"), None, 10)
+            db.list_events(None, None, Some("open_palm"), None, None, None, 10)
+                .unwrap()
+                .len(),
+            1
+        );
+        // Zone filter.
+        assert_eq!(
+            db.list_events(None, None, None, Some("driveway"), None, None, 10)
+                .unwrap()
+                .len(),
+            1
+        );
+        // before / after time bounds.
+        assert_eq!(
+            db.list_events(None, None, None, None, None, Some(150), 10)
                 .unwrap()
                 .len(),
             1
         );
         assert_eq!(
-            db.list_events(None, None, None, Some(150), 10)
+            db.list_events(None, None, None, None, Some(250), None, 10)
                 .unwrap()
                 .len(),
             1
@@ -1134,10 +1366,7 @@ mod tests {
 
         // Deleting the camera cascades to its events.
         db.delete_camera(cam.id).unwrap();
-        assert!(db
-            .list_events(None, None, None, None, 10)
-            .unwrap()
-            .is_empty());
+        assert!(all(&db).is_empty());
     }
 
     #[test]
@@ -1158,10 +1387,23 @@ mod tests {
                 w: 0.5,
                 h: 0.5,
             }],
+            zones: vec![PolyZone {
+                name: "driveway".into(),
+                points: vec![[0.1, 0.1], [0.9, 0.1], [0.9, 0.9], [0.1, 0.9]],
+                kind: ZoneKind::Required,
+                labels: vec!["person".into()],
+            }],
+            privacy_masks: vec![vec![[0.0, 0.0], [0.2, 0.0], [0.2, 0.2], [0.0, 0.2]]],
+            min_area: Some(0.001),
+            max_area: Some(0.8),
             autotrack: true,
             audio_detect: false,
             event_only_recording: false,
             gesture_detect: true,
+            model: Some("yolov8s.onnx".into()),
+            force_cpu: Some(true),
+            poll_ms: Some(2000),
+            face_recognize: Some(true),
         };
         db.update_camera(&cam).unwrap();
         let back = db.get_camera(cam.id).unwrap().unwrap();
@@ -1170,6 +1412,28 @@ mod tests {
         let z = back.detect_config.ignore_zones[0];
         assert!(z.contains(0.25, 0.25));
         assert!(!z.contains(0.75, 0.25));
+
+        let pz = &back.detect_config.zones[0];
+        assert_eq!(pz.kind, ZoneKind::Required);
+        assert!(pz.applies_to("person"));
+        assert!(!pz.applies_to("car"));
+    }
+
+    #[test]
+    fn point_in_polygon_math() {
+        // Unit square.
+        let sq = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
+        assert!(point_in_polygon(&sq, 0.5, 0.5));
+        assert!(!point_in_polygon(&sq, 1.5, 0.5));
+        assert!(!point_in_polygon(&sq, -0.1, 0.5));
+
+        // Concave arrow / chevron: a point in the notch must read as outside.
+        let chevron = [[0.0, 0.0], [0.5, 0.4], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
+        assert!(point_in_polygon(&chevron, 0.5, 0.8)); // body
+        assert!(!point_in_polygon(&chevron, 0.5, 0.1)); // inside the V notch
+
+        // Degenerate polygons never contain anything.
+        assert!(!point_in_polygon(&[[0.0, 0.0], [1.0, 1.0]], 0.5, 0.5));
     }
 
     #[test]
@@ -1189,6 +1453,9 @@ mod tests {
             days: vec![],
             start_hhmm: None,
             end_hhmm: None,
+            cooldown_secs: 0,
+            priority: 0,
+            snooze_until: 0,
             created_ts: 0,
         };
         assert!(rule.matches(3, "person", 0.8, None, None, None));
@@ -1249,6 +1516,9 @@ mod tests {
                 days: vec![1, 2, 3],
                 start_hhmm: Some("22:00".into()),
                 end_hhmm: Some("06:00".into()),
+                cooldown_secs: 30,
+                priority: 4,
+                snooze_until: 0,
                 created_ts: 0,
             })
             .unwrap();
@@ -1256,6 +1526,8 @@ mod tests {
         assert_eq!(back.days, vec![1, 2, 3]);
         assert_eq!(back.start_hhmm.as_deref(), Some("22:00"));
         assert_eq!(back.end_hhmm.as_deref(), Some("06:00"));
+        assert_eq!(back.cooldown_secs, 30);
+        assert_eq!(back.priority, 4);
         assert_eq!(db.list_alarms().unwrap().len(), 1);
         db.set_alarm_enabled(id, false).unwrap();
         assert!(!db.list_alarms().unwrap()[0].enabled);
@@ -1280,6 +1552,9 @@ mod tests {
             days: vec![],
             start_hhmm: None,
             end_hhmm: None,
+            cooldown_secs: 0,
+            priority: 0,
+            snooze_until: 0,
             created_ts: 0,
         };
         // No schedule = always armed.
@@ -1337,7 +1612,7 @@ mod tests {
                 .unwrap();
         }
         db.add_event(
-            cam.id, 2030, "person", 0.9, [0.0; 4], None, None, None, None,
+            cam.id, 2030, "person", 0.9, [0.0; 4], None, None, None, None, None,
         )
         .unwrap();
         let mut doomed = db.eventless_segments(cam.id, 5000, 60, 15).unwrap();
