@@ -150,6 +150,16 @@ pub struct DetectConfig {
     /// Offer the live hand-signal overlay for this camera (the Signals page can
     /// attribute recognized gestures to it). Detection itself runs client-side.
     pub gesture_detect: bool,
+    /// Per-camera model override (e.g. a specialized .onnx); `None` inherits the
+    /// global model. Lets different cameras run different detectors.
+    pub model: Option<String>,
+    /// Per-camera accelerator assignment: force this camera's detector onto CPU
+    /// (`Some(true)`) or the GPU (`Some(false)`); `None` inherits the global
+    /// setting. Useful to keep a low-priority camera off a busy GPU.
+    pub force_cpu: Option<bool>,
+    /// Per-camera sample interval cap in ms (resource governance / FPS cap);
+    /// `None` uses the global poll interval. Only ever slows a camera down.
+    pub poll_ms: Option<u64>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -366,6 +376,10 @@ pub struct Settings {
     /// Enhanced retention (UniFi-style): segments older than this many days
     /// are re-encoded to space-saving quality. 0 = off.
     pub enhanced_retention_days: u32,
+    /// Hardware video encoder for the enhanced-retention re-encode: "" / "cpu"
+    /// (libx264), "nvenc" (NVIDIA), "qsv" (Intel QuickSync), or "videotoolbox"
+    /// (Apple). Falls back to CPU automatically if the HW encoder fails.
+    pub hwaccel: String,
     /// Where new recordings go (any drive or UNC share); empty = the default
     /// data/recordings. Existing segments keep playing from where they are.
     pub recordings_dir: String,
@@ -454,6 +468,7 @@ impl Default for Settings {
             retention_gb: 50,
             event_retention_days: 30,
             enhanced_retention_days: 0,
+            hwaccel: String::new(),
             recordings_dir: String::new(),
             model_path: "yolov8n.onnx".into(),
             force_cpu: false,
@@ -1335,6 +1350,9 @@ mod tests {
             audio_detect: false,
             event_only_recording: false,
             gesture_detect: true,
+            model: Some("yolov8s.onnx".into()),
+            force_cpu: Some(true),
+            poll_ms: Some(2000),
         };
         db.update_camera(&cam).unwrap();
         let back = db.get_camera(cam.id).unwrap().unwrap();

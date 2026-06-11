@@ -350,6 +350,15 @@ export default function Settings({ onError }: { onError: (e: string) => void }) 
                 }
               />
             </label>
+            <label className="field" title="Hardware video encoder for the enhanced-retention re-encode. Falls back to CPU automatically if unavailable.">
+              re-encode with
+              <select value={s.hwaccel ?? ""} onChange={(e) => set({ hwaccel: e.target.value })}>
+                <option value="">CPU (libx264)</option>
+                <option value="nvenc">NVIDIA NVENC</option>
+                <option value="qsv">Intel QuickSync</option>
+                <option value="videotoolbox">Apple VideoToolbox</option>
+              </select>
+            </label>
             <label className="field">
               keep events (days)
               <input

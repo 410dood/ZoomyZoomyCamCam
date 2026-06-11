@@ -131,6 +131,9 @@ async fn camera_status(State(st): State<AppState>) -> ApiResult<Json<serde_json:
                 "recording": h.recording,
                 "last_frame_ts": h.last_frame_ts,
                 "last_error": h.last_error,
+                "inference_ms": h.inference_ms,
+                "accelerator": h.accelerator,
+                "model": h.model,
             }),
         );
     }

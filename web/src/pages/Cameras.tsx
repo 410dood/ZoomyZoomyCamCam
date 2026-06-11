@@ -26,6 +26,9 @@ function TuneModal({
     audio_detect: camera.detect_config.audio_detect ?? false,
     event_only_recording: camera.detect_config.event_only_recording ?? false,
     gesture_detect: camera.detect_config.gesture_detect ?? false,
+    model: camera.detect_config.model ?? null,
+    force_cpu: camera.detect_config.force_cpu ?? null,
+    poll_ms: camera.detect_config.poll_ms ?? null,
   });
   const [subSource, setSubSource] = useState(camera.detect_source ?? "");
 
@@ -153,6 +156,37 @@ function TuneModal({
               type="checkbox"
               checked={dc.gesture_detect}
               onChange={() => setDc({ ...dc, gesture_detect: !dc.gesture_detect })}
+            />
+          </label>
+          <label className="field" title="Per-camera model override (e.g. a specialized .onnx). Empty inherits the global model.">
+            model override
+            <input
+              type="text"
+              placeholder="inherit global"
+              value={dc.model ?? ""}
+              onChange={(e) => setDc({ ...dc, model: e.target.value.trim() || null })}
+            />
+          </label>
+          <label className="field" title="Accelerator assignment for this camera's detector.">
+            accelerator
+            <select
+              value={dc.force_cpu === null ? "" : dc.force_cpu ? "cpu" : "gpu"}
+              onChange={(e) =>
+                setDc({ ...dc, force_cpu: e.target.value === "" ? null : e.target.value === "cpu" })
+              }
+            >
+              <option value="">inherit</option>
+              <option value="gpu">GPU</option>
+              <option value="cpu">CPU</option>
+            </select>
+          </label>
+          <label className="field" title="Per-camera sample-interval cap (resource governance). Only slows this camera down.">
+            FPS cap — sample every (ms)
+            <input
+              type="number" step="100" min="0"
+              placeholder="inherit"
+              value={dc.poll_ms ?? ""}
+              onChange={(e) => setDc({ ...dc, poll_ms: e.target.value === "" ? null : Number(e.target.value) })}
             />
           </label>
           <label
@@ -437,6 +471,7 @@ export default function Cameras({
                 <th>Enabled</th>
                 <th>Detect</th>
                 <th>Record</th>
+                <th>Perf</th>
                 <th></th>
               </tr>
             </thead>
@@ -470,6 +505,13 @@ export default function Cameras({
                       </span>
                     </td>
                   ))}
+                  <td className="muted" style={{ whiteSpace: "nowrap" }}>
+                    {(() => {
+                      const s = status[String(cam.id)];
+                      if (!s?.accelerator) return "—";
+                      return `${s.inference_ms != null ? s.inference_ms.toFixed(1) + "ms · " : ""}${s.accelerator}`;
+                    })()}
+                  </td>
                   <td>
                     <button className="ghost" onClick={() => setTuning(cam)} style={{ marginRight: 8 }}>
                       Tune

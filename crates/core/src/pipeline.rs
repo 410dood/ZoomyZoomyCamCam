@@ -36,8 +36,12 @@ pub fn run(
     throttle: crate::notify::AlarmThrottle,
     shutdown: Arc<AtomicBool>,
 ) {
-    let mut detector: Option<Detector> = None;
-    let mut detector_key = String::new();
+    // One detector session per (model, force_cpu, conf, iou) combination, so
+    // cameras can be assigned different models or accelerators.
+    let mut detectors: HashMap<String, Detector> = HashMap::new();
+    let mut global_detect_key = String::new();
+    // Per-camera sample-interval cap (FPS governance).
+    let mut last_poll: HashMap<i64, Instant> = HashMap::new();
     let mut face_engine: Option<facerec::FaceEngine> = None;
     let mut face_key = String::new();
     let mut clip: Option<crate::smart::ImageEmbedder> = None;
@@ -57,29 +61,15 @@ pub fn run(
         let tick = Instant::now();
         let settings = db.settings();
 
-        // Rebuild the ONNX session if model/EP/thresholds changed.
-        let key = format!(
+        // Drop cached sessions when global model/EP/threshold settings change
+        // (per-camera overrides get their own cache keys below).
+        let gkey = format!(
             "{}|{}|{}|{}",
             settings.model_path, settings.force_cpu, settings.confidence, settings.nms_iou
         );
-        if detector.is_none() || key != detector_key {
-            match Detector::new(
-                &settings.model_path,
-                settings.force_cpu,
-                settings.confidence,
-                settings.nms_iou,
-            ) {
-                Ok(d) => {
-                    tracing::info!(model = %settings.model_path, "detector ready");
-                    detector = Some(d);
-                    detector_key = key;
-                }
-                Err(e) => {
-                    tracing::error!("detector unavailable (retrying in 30s): {e:#}");
-                    sleep_responsive(Duration::from_secs(30), &shutdown);
-                    continue;
-                }
-            }
+        if gkey != global_detect_key {
+            detectors.clear();
+            global_detect_key = gkey;
         }
 
         let cameras = db.list_cameras().unwrap_or_default();
@@ -88,6 +78,44 @@ pub fn run(
             if shutdown.load(Ordering::Relaxed) {
                 break;
             }
+            // Per-camera FPS cap: skip until this camera's interval elapses.
+            if let Some(ms) = cam.detect_config.poll_ms {
+                if last_poll
+                    .get(&cam.id)
+                    .is_some_and(|t| t.elapsed() < Duration::from_millis(ms))
+                {
+                    continue;
+                }
+                last_poll.insert(cam.id, Instant::now());
+            }
+
+            // Resolve this camera's model + accelerator (per-camera override or
+            // global), and build/fetch the matching detector session.
+            let model = cam
+                .detect_config
+                .model
+                .clone()
+                .filter(|m| !m.is_empty())
+                .unwrap_or_else(|| settings.model_path.clone());
+            let force_cpu = cam.detect_config.force_cpu.unwrap_or(settings.force_cpu);
+            let dkey = format!(
+                "{model}|{force_cpu}|{}|{}",
+                settings.confidence, settings.nms_iou
+            );
+            if !detectors.contains_key(&dkey) {
+                match Detector::new(&model, force_cpu, settings.confidence, settings.nms_iou) {
+                    Ok(d) => {
+                        tracing::info!(camera = %cam.name, model = %model, force_cpu, "detector ready");
+                        detectors.insert(dkey.clone(), d);
+                    }
+                    Err(e) => {
+                        tracing::debug!(camera = %cam.name, "detector unavailable: {e:#}");
+                        continue;
+                    }
+                }
+            }
+            let accelerator = accel_label(force_cpu);
+
             // Sample the low-res sub-stream when one is configured.
             let stream_key = match cam.detect_source.as_deref().filter(|s| !s.is_empty()) {
                 Some(_) => format!("{}_sub", cam.name),
@@ -131,8 +159,9 @@ pub fn run(
             }
             tracing::debug!(camera = %cam.name, ?verdict, "motion -> running detector");
 
-            let dets = match detector
-                .as_mut()
+            let infer_start = Instant::now();
+            let dets = match detectors
+                .get_mut(&dkey)
                 .expect("detector built above")
                 .detect(&frame)
             {
@@ -142,6 +171,12 @@ pub fn run(
                     continue;
                 }
             };
+            status.infer(
+                cam.id,
+                infer_start.elapsed().as_secs_f32() * 1000.0,
+                accelerator,
+                &model,
+            );
 
             let now = chrono::Local::now().timestamp();
             let labels = cam
@@ -656,6 +691,21 @@ fn passes_zones_and_size(
         return false;
     }
     true
+}
+
+/// Human label for the execution provider a detector is using on this OS.
+fn accel_label(force_cpu: bool) -> &'static str {
+    if force_cpu {
+        "CPU"
+    } else if cfg!(target_os = "windows") {
+        "DirectML"
+    } else if cfg!(target_os = "macos") {
+        "CoreML"
+    } else if cfg!(target_os = "linux") {
+        "CUDA"
+    } else {
+        "GPU"
+    }
 }
 
 /// The name of the (required) zone a detection's anchor falls in, for tagging

@@ -29,6 +29,9 @@ export interface DetectConfig {
   audio_detect: boolean;
   event_only_recording: boolean;
   gesture_detect: boolean;
+  model: string | null;
+  force_cpu: boolean | null;
+  poll_ms: number | null;
 }
 
 export interface Camera {
@@ -79,6 +82,7 @@ export interface Settings {
   retention_gb: number;
   event_retention_days: number;
   enhanced_retention_days: number;
+  hwaccel: string;
   recordings_dir: string;
   model_path: string;
   force_cpu: boolean;
@@ -157,6 +161,9 @@ export interface CamStatus {
   recording: boolean;
   last_frame_ts: number | null;
   last_error: string | null;
+  inference_ms: number | null;
+  accelerator: string | null;
+  model: string | null;
 }
 
 export type StatusMap = Record<string, CamStatus>;
