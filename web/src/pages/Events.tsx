@@ -7,6 +7,8 @@ export default function Events({ cameras }: { cameras: Camera[] }) {
   const [label, setLabel] = useState("");
   const [review, setReview] = useState<"all" | "alerts">("all");
   const [alertLabels, setAlertLabels] = useState<string[]>(["person"]);
+  const [plateDeny, setPlateDeny] = useState<string[]>([]);
+  const [plateAllow, setPlateAllow] = useState<string[]>([]);
   const [query, setQuery] = useState("");
   const [searchResults, setSearchResults] = useState<CamEvent[] | null>(null);
   const [searching, setSearching] = useState(false);
@@ -91,9 +93,22 @@ export default function Events({ cameras }: { cameras: Camera[] }) {
   useEffect(() => {
     api
       .settings()
-      .then((s) => setAlertLabels(s.alert_labels ?? ["person"]))
+      .then((s) => {
+        setAlertLabels(s.alert_labels ?? ["person"]);
+        setPlateDeny(s.plate_denylist ?? []);
+        setPlateAllow(s.plate_allowlist ?? []);
+      })
       .catch(() => {});
   }, []);
+
+  // Classify a read plate against the watch lists (deny wins).
+  const plateClass = (plate: string | null): "deny" | "allow" | "" => {
+    if (!plate) return "";
+    const p = plate.toUpperCase();
+    if (plateDeny.some((e) => e.trim() && p.includes(e.trim().toUpperCase()))) return "deny";
+    if (plateAllow.some((e) => e.trim() && p.includes(e.trim().toUpperCase()))) return "allow";
+    return "";
+  };
 
   useEffect(() => {
     load();
@@ -276,7 +291,15 @@ export default function Events({ cameras }: { cameras: Camera[] }) {
               <div className="meta">
                 <b>{ev.label}</b> {(ev.score * 100).toFixed(0)}% · {ev.camera}
                 {ev.face && <span style={{ color: "var(--ok)" }}> · 👤 {ev.face}</span>}
-                {ev.plate && <span style={{ color: "var(--warn)" }}> · 🚗 {ev.plate}</span>}
+                {ev.plate && (
+                  <span style={{ color: "var(--warn)" }}>
+                    {" "}· 🚗 {ev.plate}
+                    {plateClass(ev.plate) === "deny" && (
+                      <span style={{ color: "var(--danger, #e5484d)", fontWeight: 700 }}> ⚠ of interest</span>
+                    )}
+                    {plateClass(ev.plate) === "allow" && <span style={{ color: "var(--ok)" }}> ✓ known</span>}
+                  </span>
+                )}
                 {ev.gesture && <span style={{ color: "var(--accent, #4f8cff)" }}> · ✋ {ev.gesture}</span>}
                 {ev.zone && <span className="muted"> · ▱ {ev.zone}</span>}
                 <div className="muted">{fmtTime(ev.ts)}</div>

@@ -310,6 +310,23 @@ pub fn run(
                             })
                         });
                         if let Some(text) = read.filter(|t| t.len() >= 3) {
+                            // Vehicle of interest: a deny-listed plate gets a
+                            // guaranteed high-priority push (independent of any
+                            // alarm rule).
+                            if crate::lpr::plate_status(
+                                &text,
+                                &settings.plate_allowlist,
+                                &settings.plate_denylist,
+                            ) == crate::lpr::PlateStatus::Deny
+                                && !settings.health_ntfy_url.is_empty()
+                            {
+                                crate::notify::ntfy_text(
+                                    &settings.health_ntfy_url,
+                                    &format!("🚗 Vehicle of interest on {}", cam.name),
+                                    &format!("Plate {text} (deny-list) seen on {}", cam.name),
+                                    "warning,oncoming_automobile",
+                                );
+                            }
                             plates[i] = Some(text);
                         }
                     }

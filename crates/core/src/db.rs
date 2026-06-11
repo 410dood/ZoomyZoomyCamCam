@@ -419,6 +419,11 @@ pub struct Settings {
     pub face_match_threshold: f32,
     pub face_det_model: String,
     pub face_rec_model: String,
+    /// License plates of interest (substring match, case-insensitive). A read
+    /// that matches fires a guaranteed high-priority "vehicle of interest" push.
+    pub plate_denylist: Vec<String>,
+    /// Known/expected plates (substring match) — surfaced as "known" in review.
+    pub plate_allowlist: Vec<String>,
     /// AudioSet display names (yamnet_class_map.csv) that produce events.
     pub audio_labels: Vec<String>,
     /// Mean YAMNet score required to fire an audio event.
@@ -507,6 +512,8 @@ impl Default for Settings {
             .map(String::from)
             .to_vec(),
             audio_threshold: 0.4,
+            plate_denylist: Vec::new(),
+            plate_allowlist: Vec::new(),
             health_ntfy_url: String::new(),
             public_base_url: String::new(),
             gesture_recognition: true,

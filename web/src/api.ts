@@ -100,6 +100,8 @@ export interface Settings {
   face_match_threshold: number;
   face_det_model: string;
   face_rec_model: string;
+  plate_denylist: string[];
+  plate_allowlist: string[];
   health_ntfy_url: string;
   public_base_url: string;
   gesture_recognition: boolean;

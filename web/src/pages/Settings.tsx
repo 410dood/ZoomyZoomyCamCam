@@ -170,6 +170,28 @@ export default function Settings({ onError }: { onError: (e: string) => void }) 
                 onChange={(e) => set({ face_match_threshold: num(e.target.value, s.face_match_threshold) })}
               />
             </label>
+            <label className="field" style={{ flex: 1, minWidth: 280 }} title="Plates (or partials) of interest — a match fires a guaranteed high-priority push.">
+              plate deny-list (vehicles of interest, comma-separated)
+              <input
+                type="text"
+                placeholder="B8AU77, STOLEN1"
+                value={(s.plate_denylist ?? []).join(", ")}
+                onChange={(e) =>
+                  set({ plate_denylist: e.target.value.split(",").map((x) => x.trim()).filter(Boolean) })
+                }
+              />
+            </label>
+            <label className="field" style={{ flex: 1, minWidth: 280 }} title="Known/expected plates — surfaced as 'known' in review.">
+              plate allow-list (known vehicles)
+              <input
+                type="text"
+                placeholder="MYCAR1, SPOUSE2"
+                value={(s.plate_allowlist ?? []).join(", ")}
+                onChange={(e) =>
+                  set({ plate_allowlist: e.target.value.split(",").map((x) => x.trim()).filter(Boolean) })
+                }
+              />
+            </label>
           </div>
         </div>
 
