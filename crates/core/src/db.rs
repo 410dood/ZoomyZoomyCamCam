@@ -73,6 +73,9 @@ pub struct DetectConfig {
     /// no nearby event after a grace period — continuous footage becomes
     /// event-bracketed clips, saving most of the disk.
     pub event_only_recording: bool,
+    /// Offer the live hand-signal overlay for this camera (the Signals page can
+    /// attribute recognized gestures to it). Detection itself runs client-side.
+    pub gesture_detect: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -92,6 +95,9 @@ pub struct Event {
     /// License plate text (LPR), when the detection is a vehicle with a
     /// readable plate.
     pub plate: Option<String>,
+    /// Recognized hand signal (e.g. "open_palm", "victory"), when the event
+    /// came from the hand-signal recognizer.
+    pub gesture: Option<String>,
 }
 
 /// Alarm Manager rule (UniFi style if-this-then-that): all set conditions
@@ -109,6 +115,11 @@ pub struct AlarmRule {
     pub face_like: Option<String>,
     /// Substring match on the OCRed plate.
     pub plate_like: Option<String>,
+    /// Match on the recognized hand signal (exact canonical name, e.g.
+    /// "open_palm"). Lets a held gesture arm a webhook/ntfy/MQTT action —
+    /// a silent "panic" hand signal at the door, for instance.
+    #[serde(default)]
+    pub gesture_like: Option<String>,
     #[serde(default)]
     pub min_score: f32,
     /// "webhook" (POST event JSON to target URL), "mqtt" (publish to
@@ -166,6 +177,7 @@ impl AlarmRule {
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn matches(
         &self,
         camera_id: i64,
@@ -173,6 +185,7 @@ impl AlarmRule {
         score: f32,
         face: Option<&str>,
         plate: Option<&str>,
+        gesture: Option<&str>,
     ) -> bool {
         if !self.enabled || score < self.min_score {
             return false;
@@ -197,6 +210,15 @@ impl AlarmRule {
         if let Some(p) = self.plate_like.as_deref() {
             let hit = plate
                 .map(|v| v.to_uppercase().contains(&p.to_uppercase()))
+                .unwrap_or(false);
+            if !hit {
+                return false;
+            }
+        }
+        if let Some(g) = self.gesture_like.as_deref() {
+            let want = g.to_lowercase();
+            let hit = gesture
+                .map(|v| v.eq_ignore_ascii_case(&want))
                 .unwrap_or(false);
             if !hit {
                 return false;
@@ -291,6 +313,17 @@ pub struct Settings {
     /// ntfy topic URL for camera health pushes (offline / back online);
     /// empty = off.
     pub health_ntfy_url: String,
+    /// Master switch for the live hand-signal recognizer (the Signals page).
+    pub gesture_recognition: bool,
+    /// How long (seconds) a hand signal must be held before it fires an event —
+    /// debounces accidental poses.
+    pub gesture_hold_secs: f32,
+    /// Canonical gesture names that produce events (see the `gesture` crate's
+    /// taxonomy). Empty = every recognized signal.
+    pub gesture_labels: Vec<String>,
+    /// MediaPipe gesture-recognizer task bundle the browser loads. Defaults to
+    /// Google's CDN; point it at a self-hosted copy for fully offline use.
+    pub gesture_model_url: String,
 }
 
 impl Default for Settings {
@@ -349,6 +382,14 @@ impl Default for Settings {
             .to_vec(),
             audio_threshold: 0.4,
             health_ntfy_url: String::new(),
+            gesture_recognition: true,
+            gesture_hold_secs: 1.5,
+            gesture_labels: ["open_palm", "victory", "thumb_up"]
+                .map(String::from)
+                .to_vec(),
+            gesture_model_url: "https://storage.googleapis.com/mediapipe-models/\
+                gesture_recognizer/gesture_recognizer/float16/1/gesture_recognizer.task"
+                .into(),
         }
     }
 }
@@ -400,6 +441,7 @@ impl Db {
         let _ = conn.execute("ALTER TABLE cameras ADD COLUMN detect_source TEXT", []);
         let _ = conn.execute("ALTER TABLE events ADD COLUMN face TEXT", []);
         let _ = conn.execute("ALTER TABLE events ADD COLUMN plate TEXT", []);
+        let _ = conn.execute("ALTER TABLE events ADD COLUMN gesture TEXT", []);
         let _ = conn.execute(
             "ALTER TABLE segments ADD COLUMN reduced INTEGER NOT NULL DEFAULT 0",
             [],
@@ -431,6 +473,7 @@ impl Db {
         )?;
         // Additive migration for pre-schedule alarms tables.
         let _ = conn.execute("ALTER TABLE alarms ADD COLUMN schedule_json TEXT", []);
+        let _ = conn.execute("ALTER TABLE alarms ADD COLUMN gesture_like TEXT", []);
         Ok(Self(Arc::new(Mutex::new(conn))))
     }
 
@@ -532,14 +575,15 @@ impl Db {
         snapshot: Option<&str>,
         face: Option<&str>,
         plate: Option<&str>,
+        gesture: Option<&str>,
     ) -> Result<i64> {
         let conn = self.conn();
         conn.execute(
-            "INSERT INTO events (camera_id, ts, label, score, x1, y1, x2, y2, snapshot, face, plate)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            "INSERT INTO events (camera_id, ts, label, score, x1, y1, x2, y2, snapshot, face, plate, gesture)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             params![
                 camera_id, ts, label, score, bbox[0], bbox[1], bbox[2], bbox[3], snapshot, face,
-                plate
+                plate, gesture
             ],
         )?;
         Ok(conn.last_insert_rowid())
@@ -549,34 +593,26 @@ impl Db {
         &self,
         camera_id: Option<i64>,
         label: Option<&str>,
+        gesture: Option<&str>,
         before_ts: Option<i64>,
         limit: u32,
     ) -> Result<Vec<Event>> {
         let conn = self.conn();
         let mut stmt = conn.prepare(
             "SELECT e.id, e.camera_id, c.name, e.ts, e.label, e.score,
-                    e.x1, e.y1, e.x2, e.y2, e.snapshot, e.face, e.plate
+                    e.x1, e.y1, e.x2, e.y2, e.snapshot, e.face, e.plate, e.gesture
              FROM events e JOIN cameras c ON c.id = e.camera_id
              WHERE (?1 IS NULL OR e.camera_id = ?1)
                AND (?2 IS NULL OR e.label = ?2)
-               AND (?3 IS NULL OR e.ts < ?3)
-             ORDER BY e.ts DESC, e.id DESC LIMIT ?4",
+               AND (?3 IS NULL OR e.gesture = ?3)
+               AND (?4 IS NULL OR e.ts < ?4)
+             ORDER BY e.ts DESC, e.id DESC LIMIT ?5",
         )?;
         let rows = stmt
-            .query_map(params![camera_id, label, before_ts, limit], |r| {
-                Ok(Event {
-                    id: r.get(0)?,
-                    camera_id: r.get(1)?,
-                    camera: r.get(2)?,
-                    ts: r.get(3)?,
-                    label: r.get(4)?,
-                    score: r.get(5)?,
-                    bbox: [r.get(6)?, r.get(7)?, r.get(8)?, r.get(9)?],
-                    snapshot: r.get(10)?,
-                    face: r.get(11)?,
-                    plate: r.get(12)?,
-                })
-            })?
+            .query_map(
+                params![camera_id, label, gesture, before_ts, limit],
+                row_to_event,
+            )?
             .collect::<rusqlite::Result<Vec<_>>>()?;
         Ok(rows)
     }
@@ -586,23 +622,10 @@ impl Db {
         let ev = conn
             .query_row(
                 "SELECT e.id, e.camera_id, c.name, e.ts, e.label, e.score,
-                        e.x1, e.y1, e.x2, e.y2, e.snapshot, e.face, e.plate
+                        e.x1, e.y1, e.x2, e.y2, e.snapshot, e.face, e.plate, e.gesture
                  FROM events e JOIN cameras c ON c.id = e.camera_id WHERE e.id = ?1",
                 [id],
-                |r| {
-                    Ok(Event {
-                        id: r.get(0)?,
-                        camera_id: r.get(1)?,
-                        camera: r.get(2)?,
-                        ts: r.get(3)?,
-                        label: r.get(4)?,
-                        score: r.get(5)?,
-                        bbox: [r.get(6)?, r.get(7)?, r.get(8)?, r.get(9)?],
-                        snapshot: r.get(10)?,
-                        face: r.get(11)?,
-                        plate: r.get(12)?,
-                    })
-                },
+                row_to_event,
             )
             .optional()?;
         Ok(ev)
@@ -618,8 +641,8 @@ impl Db {
         let conn = self.conn();
         conn.execute(
             "INSERT INTO alarms (name, enabled, camera_id, label, face_like, plate_like,
-             min_score, action, target, schedule_json, created_ts)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+             gesture_like, min_score, action, target, schedule_json, created_ts)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             params![
                 r.name,
                 r.enabled,
@@ -627,6 +650,7 @@ impl Db {
                 r.label,
                 r.face_like,
                 r.plate_like,
+                r.gesture_like,
                 r.min_score,
                 r.action,
                 r.target,
@@ -641,7 +665,7 @@ impl Db {
         let conn = self.conn();
         let mut stmt = conn.prepare(
             "SELECT id, name, enabled, camera_id, label, face_like, plate_like,
-                    min_score, action, target, created_ts, schedule_json
+                    min_score, action, target, created_ts, schedule_json, gesture_like
              FROM alarms ORDER BY id",
         )?;
         let rows = stmt
@@ -659,6 +683,7 @@ impl Db {
                     label: r.get(4)?,
                     face_like: r.get(5)?,
                     plate_like: r.get(6)?,
+                    gesture_like: r.get(12)?,
                     min_score: r.get(7)?,
                     action: r.get(8)?,
                     target: r.get(9)?,
@@ -994,6 +1019,22 @@ impl Db {
     }
 }
 
+fn row_to_event(r: &rusqlite::Row<'_>) -> rusqlite::Result<Event> {
+    Ok(Event {
+        id: r.get(0)?,
+        camera_id: r.get(1)?,
+        camera: r.get(2)?,
+        ts: r.get(3)?,
+        label: r.get(4)?,
+        score: r.get(5)?,
+        bbox: [r.get(6)?, r.get(7)?, r.get(8)?, r.get(9)?],
+        snapshot: r.get(10)?,
+        face: r.get(11)?,
+        plate: r.get(12)?,
+        gesture: r.get(13)?,
+    })
+}
+
 fn row_to_camera(r: &rusqlite::Row<'_>) -> rusqlite::Result<Camera> {
     let detect_json: Option<String> = r.get(7)?;
     Ok(Camera {
@@ -1053,23 +1094,50 @@ mod tests {
             None,
             None,
             None,
+            None,
         )
         .unwrap();
-        db.add_event(cam.id, 200, "car", 0.8, [0.0; 4], None, None, None)
+        db.add_event(cam.id, 200, "car", 0.8, [0.0; 4], None, None, None, None)
             .unwrap();
+        db.add_event(
+            cam.id,
+            300,
+            "gesture",
+            1.0,
+            [0.0; 4],
+            None,
+            None,
+            None,
+            Some("open_palm"),
+        )
+        .unwrap();
 
-        assert_eq!(db.list_events(None, None, None, 10).unwrap().len(), 2);
+        assert_eq!(db.list_events(None, None, None, None, 10).unwrap().len(), 3);
         assert_eq!(
-            db.list_events(None, Some("person"), None, 10)
+            db.list_events(None, Some("person"), None, None, 10)
                 .unwrap()
                 .len(),
             1
         );
-        assert_eq!(db.list_events(None, None, Some(150), 10).unwrap().len(), 1);
+        assert_eq!(
+            db.list_events(None, None, Some("open_palm"), None, 10)
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(
+            db.list_events(None, None, None, Some(150), 10)
+                .unwrap()
+                .len(),
+            1
+        );
 
         // Deleting the camera cascades to its events.
         db.delete_camera(cam.id).unwrap();
-        assert!(db.list_events(None, None, None, 10).unwrap().is_empty());
+        assert!(db
+            .list_events(None, None, None, None, 10)
+            .unwrap()
+            .is_empty());
     }
 
     #[test]
@@ -1093,6 +1161,7 @@ mod tests {
             autotrack: true,
             audio_detect: false,
             event_only_recording: false,
+            gesture_detect: true,
         };
         db.update_camera(&cam).unwrap();
         let back = db.get_camera(cam.id).unwrap().unwrap();
@@ -1113,6 +1182,7 @@ mod tests {
             label: Some("person".into()),
             face_like: None,
             plate_like: None,
+            gesture_like: None,
             min_score: 0.5,
             action: "webhook".into(),
             target: "http://x".into(),
@@ -1121,10 +1191,10 @@ mod tests {
             end_hhmm: None,
             created_ts: 0,
         };
-        assert!(rule.matches(3, "person", 0.8, None, None));
-        assert!(!rule.matches(2, "person", 0.8, None, None)); // wrong camera
-        assert!(!rule.matches(3, "car", 0.8, None, None)); // wrong label
-        assert!(!rule.matches(3, "person", 0.3, None, None)); // below score
+        assert!(rule.matches(3, "person", 0.8, None, None, None));
+        assert!(!rule.matches(2, "person", 0.8, None, None, None)); // wrong camera
+        assert!(!rule.matches(3, "car", 0.8, None, None, None)); // wrong label
+        assert!(!rule.matches(3, "person", 0.3, None, None, None)); // below score
 
         let face_rule = AlarmRule {
             camera_id: None,
@@ -1133,20 +1203,31 @@ mod tests {
             min_score: 0.0,
             ..rule.clone()
         };
-        assert!(face_rule.matches(1, "person", 0.9, Some("dark-COAT-guy"), None));
-        assert!(!face_rule.matches(1, "person", 0.9, None, None));
+        assert!(face_rule.matches(1, "person", 0.9, Some("dark-COAT-guy"), None, None));
+        assert!(!face_rule.matches(1, "person", 0.9, None, None, None));
 
         let plate_rule = AlarmRule {
             face_like: None,
             plate_like: Some("au77".into()),
             ..face_rule
         };
-        assert!(plate_rule.matches(1, "car", 0.9, None, Some("B8AU77")));
-        assert!(!plate_rule.matches(1, "car", 0.9, None, Some("XYZ123")));
+        assert!(plate_rule.matches(1, "car", 0.9, None, Some("B8AU77"), None));
+        assert!(!plate_rule.matches(1, "car", 0.9, None, Some("XYZ123"), None));
 
         let mut disabled = plate_rule.clone();
         disabled.enabled = false;
-        assert!(!disabled.matches(1, "car", 0.9, None, Some("B8AU77")));
+        assert!(!disabled.matches(1, "car", 0.9, None, Some("B8AU77"), None));
+
+        // Gesture rule: a held hand signal arms the action.
+        let gesture_rule = AlarmRule {
+            label: Some("gesture".into()),
+            plate_like: None,
+            gesture_like: Some("open_palm".into()),
+            ..rule.clone()
+        };
+        assert!(gesture_rule.matches(3, "gesture", 1.0, None, None, Some("open_palm")));
+        assert!(!gesture_rule.matches(3, "gesture", 1.0, None, None, Some("victory")));
+        assert!(!gesture_rule.matches(3, "gesture", 1.0, None, None, None));
     }
 
     #[test]
@@ -1161,6 +1242,7 @@ mod tests {
                 label: Some("person".into()),
                 face_like: None,
                 plate_like: None,
+                gesture_like: None,
                 min_score: 0.0,
                 action: "webhook".into(),
                 target: "http://t".into(),
@@ -1191,6 +1273,7 @@ mod tests {
             label: None,
             face_like: None,
             plate_like: None,
+            gesture_like: None,
             min_score: 0.0,
             action: "webhook".into(),
             target: "http://x".into(),
@@ -1253,8 +1336,10 @@ mod tests {
             db.upsert_segment(cam.id, ts, &format!("p{ts}.mp4"), 10)
                 .unwrap();
         }
-        db.add_event(cam.id, 2030, "person", 0.9, [0.0; 4], None, None, None)
-            .unwrap();
+        db.add_event(
+            cam.id, 2030, "person", 0.9, [0.0; 4], None, None, None, None,
+        )
+        .unwrap();
         let mut doomed = db.eventless_segments(cam.id, 5000, 60, 15).unwrap();
         doomed.sort();
         assert_eq!(

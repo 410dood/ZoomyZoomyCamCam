@@ -37,5 +37,6 @@ fs2.workspace = true
 
 detector = { path = "../detector" }
 facerec = { path = "../facerec" }
+gesture = { path = "../gesture" }
 motion = { path = "../motion" }
 recorder = { path = "../recorder" }

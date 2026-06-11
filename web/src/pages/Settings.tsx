@@ -173,6 +173,56 @@ export default function Settings({ onError }: { onError: (e: string) => void }) 
           </div>
         </div>
 
+        <div className="card">
+          <h2>Hand signals ✋</h2>
+          <p className="muted" style={{ marginTop: 0 }}>
+            The Signals page tracks hand landmarks live in the browser. A held, armed signal logs
+            an event and fires any Alarm with a matching <b>gesture</b> condition.
+          </p>
+          <div className="row">
+            <label className="toggle field">
+              enable hand signals
+              <input
+                type="checkbox"
+                checked={s.gesture_recognition}
+                onChange={() => set({ gesture_recognition: !s.gesture_recognition })}
+              />
+            </label>
+            <label className="field">
+              hold time before firing (s)
+              <input
+                type="number" step="0.1" min="0"
+                value={s.gesture_hold_secs}
+                onChange={(e) => set({ gesture_hold_secs: num(e.target.value, s.gesture_hold_secs) })}
+              />
+            </label>
+            <label className="field" style={{ flex: 1, minWidth: 300 }}>
+              armed signals (comma-separated, empty = any)
+              <input
+                type="text"
+                placeholder="open_palm, victory, thumb_up"
+                value={(s.gesture_labels ?? []).join(", ")}
+                onChange={(e) =>
+                  set({
+                    gesture_labels: e.target.value
+                      .split(",")
+                      .map((x) => x.trim())
+                      .filter(Boolean),
+                  })
+                }
+              />
+            </label>
+            <label className="field" style={{ flex: 1, minWidth: 320 }}>
+              model URL (MediaPipe .task; default = Google CDN, override to self-host offline)
+              <input
+                type="text"
+                value={s.gesture_model_url ?? ""}
+                onChange={(e) => set({ gesture_model_url: e.target.value })}
+              />
+            </label>
+          </div>
+        </div>
+
         <RemoteAccessCard onError={onError} />
 
         <div className="card">

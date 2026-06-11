@@ -211,6 +211,7 @@ pub fn run(
                     snapshot.as_deref(),
                     None,
                     None,
+                    None,
                 ) {
                     Ok(id) => {
                         tracing::info!(
@@ -240,10 +241,11 @@ pub fn run(
                             snapshot_path: snapshot.is_some().then_some(snap_abs.as_path()),
                             face: None,
                             plate: None,
+                            gesture: None,
                         };
                         for rule in alarms
                             .iter()
-                            .filter(|r| r.matches(cam.id, &label, score, None, None))
+                            .filter(|r| r.matches(cam.id, &label, score, None, None, None))
                         {
                             crate::notify::fire(rule, &alarm_ev, &mqtt_tx);
                         }

@@ -14,7 +14,21 @@ The differentiator: Blue Iris is Windows-only; Frigate needs Linux/Docker plus
 Coral/Nvidia. We combine **Moonfire-class efficient recording** with **portable
 GPU-accelerated AI** so the same model runs on Apple Silicon and any DirectX 12 GPU.
 
-## Current status: v0.3 — competitor matrix 15/16 shipped, 2026-06-09
+## Current status: v0.3 — competitor matrix 28/28, 2026-06-10
+
+Latest: **hand-signal recognition** (#28) — a `Signals` page tracks the 21-point
+hand-landmark mesh live in the browser (MediaPipe Tasks Vision, GPU, loaded from
+a configurable CDN so it stays portable/offline-capable), classifies hand signals
+(open-palm/fist/victory/point/thumb-up·down/I-love-you), and on a *held* armed
+signal POSTs `/api/gesture` → a first-class `gesture` event (with a context
+snapshot) that fires the existing alarm/webhook/ntfy/MQTT machinery — a silent
+hand-signal "panic button". New `crates/gesture` holds a pure, unit-tested
+geometric classifier + the canonical gesture taxonomy the API normalizes against.
+Per-camera toggle, Settings knobs (enable / hold-time / armed list / model URL),
+an Alarm `gesture` condition, and Events chip+filter round it out. Server side is
+build/clippy/test-green; the live browser overlay needs webcam validation.
+
+### Earlier: competitor matrix shipped, 2026-06-09
 
 On top of the v0.1 slice below: Tauri desktop app (close-to-tray keeps recording,
 NSIS installer bundling go2rtc/ffmpeg/model/UI), validated against **real hardware**
@@ -25,7 +39,9 @@ scrubber, event clip export, review split (alerts/detections), ONVIF resolve
 (IP+creds → stream URLs) and **ONVIF PTZ** (hold-to-move pad, physically validated),
 remote-access auth (loopback exempt), and MQTT (events + availability, verified
 against a local broker). CI workflow covers fmt/clippy/test on the three OSes +
-web build. The only unshipped matrix item is **face recognition / LPR** (#14).
+web build. Every docs/02 matrix item through #27 is shipped — including face
+recognition + LPR (#14), CLIP smart search (#17), PTZ autotrack (#18), YAMNet
+audio events (#19), enhanced retention (#20), and camera health pushes (#27).
 
 ## v0.1 baseline: Phases 1-4 working on Windows, 2026-06-09
 

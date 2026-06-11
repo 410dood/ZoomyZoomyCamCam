@@ -15,6 +15,7 @@ export interface DetectConfig {
   autotrack: boolean;
   audio_detect: boolean;
   event_only_recording: boolean;
+  gesture_detect: boolean;
 }
 
 export interface Camera {
@@ -40,6 +41,7 @@ export interface CamEvent {
   snapshot: string | null;
   face: string | null;
   plate: string | null;
+  gesture: string | null;
 }
 
 export interface Segment {
@@ -77,6 +79,10 @@ export interface Settings {
   face_det_model: string;
   face_rec_model: string;
   health_ntfy_url: string;
+  gesture_recognition: boolean;
+  gesture_hold_secs: number;
+  gesture_labels: string[];
+  gesture_model_url: string;
 }
 
 export interface CamStorage {
@@ -114,6 +120,7 @@ export interface AlarmRule {
   label: string | null;
   face_like: string | null;
   plate_like: string | null;
+  gesture_like: string | null;
   min_score: number;
   action: string;
   target: string;
@@ -168,13 +175,19 @@ export const api = {
   patchCamera: (id: number, patch: Partial<Camera>) =>
     req<Camera>(`/api/cameras/${id}`, { method: "PATCH", body: JSON.stringify(patch) }),
   deleteCamera: (id: number) => req<void>(`/api/cameras/${id}`, { method: "DELETE" }),
-  events: (q: { camera_id?: number; label?: string; limit?: number } = {}) => {
+  events: (q: { camera_id?: number; label?: string; gesture?: string; limit?: number } = {}) => {
     const p = new URLSearchParams();
     if (q.camera_id != null) p.set("camera_id", String(q.camera_id));
     if (q.label) p.set("label", q.label);
+    if (q.gesture) p.set("gesture", q.gesture);
     if (q.limit) p.set("limit", String(q.limit));
     return req<CamEvent[]>(`/api/events?${p}`);
   },
+  recordGesture: (body: { camera?: string; gesture: string; score?: number }) =>
+    req<{ recorded: boolean; event_id?: number; gesture?: string; reason?: string }>(
+      "/api/gesture",
+      { method: "POST", body: JSON.stringify(body) }
+    ),
   recordings: (q: { camera_id?: number; limit?: number } = {}) => {
     const p = new URLSearchParams();
     if (q.camera_id != null) p.set("camera_id", String(q.camera_id));

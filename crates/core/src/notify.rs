@@ -21,6 +21,7 @@ pub struct AlarmEvent<'a> {
     pub snapshot_path: Option<&'a Path>,
     pub face: Option<&'a str>,
     pub plate: Option<&'a str>,
+    pub gesture: Option<&'a str>,
 }
 
 /// Fire one matched rule's action. Failures are logged and swallowed —
@@ -68,6 +69,7 @@ fn webhook(url: &str, ev: &AlarmEvent) {
         "snapshot": ev.snapshot_url,
         "face": ev.face,
         "plate": ev.plate,
+        "gesture": ev.gesture,
     });
     if let Err(e) = ureq::post(url)
         .timeout(Duration::from_secs(3))
@@ -86,6 +88,9 @@ fn ntfy(url: &str, rule_name: &str, ev: &AlarmEvent) {
     }
     if let Some(p) = ev.plate {
         detail.push_str(&format!(" — plate {p}"));
+    }
+    if let Some(g) = ev.gesture {
+        detail.push_str(&format!(" — ✋ {g}"));
     }
 
     let snapshot = ev.snapshot_path.and_then(|p| std::fs::read(p).ok());

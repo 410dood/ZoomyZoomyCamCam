@@ -15,6 +15,7 @@ members = [
     "crates/spike-detect",
     "crates/detector",
     "crates/facerec",
+    "crates/gesture",
     "crates/motion",
     "crates/recorder",
     "crates/core",

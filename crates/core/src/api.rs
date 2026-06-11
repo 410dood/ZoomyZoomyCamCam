@@ -1,4 +1,4 @@
-﻿//! HTTP API consumed by the web UI (and anything else — it's plain JSON).
+//! HTTP API consumed by the web UI (and anything else — it's plain JSON).
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -27,6 +27,9 @@ pub struct AppState {
     pub ffmpeg_bin: Option<PathBuf>,
     pub status: StatusBoard,
     pub sessions: crate::auth::Sessions,
+    /// Lets request handlers (the hand-signal recognizer) publish events and
+    /// fire alarm actions on the same channel the detection pipeline uses.
+    pub mqtt_tx: std::sync::mpsc::Sender<crate::mqtt::EventMsg>,
 }
 
 pub fn router(state: AppState) -> Router {
@@ -46,6 +49,7 @@ pub fn router(state: AppState) -> Router {
         )
         .route("/api/cameras/{id}/ptz", get(ptz_caps).post(ptz_command))
         .route("/api/events", get(list_events))
+        .route("/api/gesture", axum::routing::post(record_gesture))
         .route("/api/events/{id}/clip", get(event_clip))
         .route("/api/search", get(smart_search))
         .route("/api/alarms", get(list_alarms_api).post(add_alarm_api))
@@ -436,6 +440,7 @@ async fn ptz_command(
 struct EventQuery {
     camera_id: Option<i64>,
     label: Option<String>,
+    gesture: Option<String>,
     before: Option<i64>,
     #[serde(default = "default_limit")]
     limit: u32,
@@ -452,9 +457,177 @@ async fn list_events(
     Ok(Json(st.db.list_events(
         q.camera_id,
         q.label.as_deref(),
+        q.gesture.as_deref(),
         q.before,
         q.limit.min(1000),
     )?))
+}
+
+#[derive(Deserialize)]
+struct GestureReq {
+    /// Registered camera to attribute the signal to; its current frame becomes
+    /// the event's context snapshot. Optional when exactly one camera exists.
+    camera: Option<String>,
+    gesture: String,
+    #[serde(default)]
+    score: Option<f32>,
+}
+
+/// Record a hand signal recognized by the browser-side recognizer as a
+/// first-class event, then fire matching alarm rules (webhook / ntfy / MQTT).
+/// This is what turns "raise an open palm at the door" into a real, silent
+/// trigger: the detection runs on-device (portable, GPU-accelerated), but the
+/// surveillance semantics — events, snapshots, alarms — live here.
+async fn record_gesture(
+    State(st): State<AppState>,
+    Json(req): Json<GestureReq>,
+) -> ApiResult<Json<serde_json::Value>> {
+    let settings = st.db.settings();
+    if !settings.gesture_recognition {
+        return Err(bad_request("gesture recognition is disabled in Settings"));
+    }
+    let canonical = gesture::canonical(&req.gesture)
+        .ok_or_else(|| bad_request(format!("unknown gesture {:?}", req.gesture)))?;
+    // Honor the armed-gesture filter (empty = any recognized signal counts).
+    if !settings.gesture_labels.is_empty()
+        && !settings.gesture_labels.iter().any(|g| g == canonical)
+    {
+        return Ok(Json(
+            serde_json::json!({ "recorded": false, "reason": "gesture not armed" }),
+        ));
+    }
+
+    // Attribute the signal to a camera (its current view is the snapshot).
+    let cameras = st.db.list_cameras()?;
+    let cam = match req.camera.as_deref() {
+        Some(name) => cameras.iter().find(|c| c.name == name).cloned(),
+        None if cameras.len() == 1 => cameras.into_iter().next(),
+        None => None,
+    }
+    .ok_or_else(|| bad_request("no camera to attribute the signal to — register or select one"))?;
+
+    let now = chrono::Local::now().timestamp();
+    let score = req.score.unwrap_or(1.0).clamp(0.0, 1.0);
+
+    // Best-effort: grab what that camera currently sees as context.
+    let snap_rel = format!("{}-gesture-{}.jpg", cam.name, now);
+    let snap_abs = st.snapshots_dir.join(&snap_rel);
+    let snapshot = {
+        let api_base = st.go2rtc.api_base();
+        let key = cam.name.clone();
+        let abs = snap_abs.clone();
+        tokio::task::spawn_blocking(move || save_gesture_snapshot(&api_base, &key, &abs))
+            .await
+            .ok()
+            .and_then(|r| r.ok())
+            .map(|_| snap_rel.clone())
+    };
+
+    let id = st.db.add_event(
+        cam.id,
+        now,
+        "gesture",
+        score,
+        [0.0; 4],
+        snapshot.as_deref(),
+        None,
+        None,
+        Some(canonical),
+    )?;
+    tracing::info!(camera = %cam.name, gesture = canonical, event = id, "hand signal recorded");
+
+    let snap_url = snapshot
+        .as_ref()
+        .map(|s| format!("/api/snapshots/{s}"))
+        .unwrap_or_default();
+    // Publish to MQTT subscribers on the normal event channel.
+    let _ = st.mqtt_tx.send(crate::mqtt::EventMsg {
+        event_id: id,
+        camera: cam.name.clone(),
+        label: "gesture".to_string(),
+        score,
+        ts: now,
+        snapshot: snap_url.clone(),
+        topic: None,
+    });
+
+    // Fire webhook + matching alarm actions off-thread (blocking I/O), so a
+    // slow listener never stalls the response.
+    let rules: Vec<crate::db::AlarmRule> = st
+        .db
+        .list_alarms()?
+        .into_iter()
+        .filter(|r| r.matches(cam.id, "gesture", score, None, None, Some(canonical)))
+        .collect();
+    let mqtt_tx = st.mqtt_tx.clone();
+    let webhook_url = settings.webhook_url.clone();
+    let camera = cam.name.clone();
+    let gesture_owned = canonical.to_string();
+    let snap_path = snapshot.as_ref().map(|_| snap_abs.clone());
+    tokio::task::spawn_blocking(move || {
+        let ev = crate::notify::AlarmEvent {
+            event_id: id,
+            camera: &camera,
+            label: "gesture",
+            score,
+            ts: now,
+            snapshot_url: &snap_url,
+            snapshot_path: snap_path.as_deref(),
+            face: None,
+            plate: None,
+            gesture: Some(&gesture_owned),
+        };
+        if !webhook_url.is_empty() {
+            let payload = serde_json::json!({
+                "type": "gesture",
+                "event_id": id,
+                "camera": camera,
+                "label": "gesture",
+                "gesture": gesture_owned,
+                "score": score,
+                "ts": now,
+                "snapshot": ev.snapshot_url,
+            });
+            if let Err(e) = ureq::post(&webhook_url)
+                .timeout(std::time::Duration::from_secs(3))
+                .send_json(payload)
+            {
+                tracing::debug!("gesture webhook failed: {e}");
+            }
+        }
+        for rule in &rules {
+            crate::notify::fire(rule, &ev, &mqtt_tx);
+        }
+    });
+
+    Ok(Json(serde_json::json!({
+        "recorded": true,
+        "event_id": id,
+        "gesture": canonical,
+        "camera": cam.name,
+    })))
+}
+
+/// Fetch the camera's current frame from go2rtc and write it to `path`.
+fn save_gesture_snapshot(
+    api_base: &str,
+    camera: &str,
+    path: &std::path::Path,
+) -> anyhow::Result<()> {
+    use std::io::Read as _;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+    let url = format!("{api_base}/api/frame.jpeg?src={camera}");
+    let resp = ureq::get(&url)
+        .timeout(std::time::Duration::from_secs(5))
+        .call()?;
+    let mut bytes = Vec::new();
+    resp.into_reader()
+        .take(32 * 1024 * 1024)
+        .read_to_end(&mut bytes)?;
+    std::fs::write(path, &bytes)?;
+    Ok(())
 }
 
 #[derive(Deserialize)]

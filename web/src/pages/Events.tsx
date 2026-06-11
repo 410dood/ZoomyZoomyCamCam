@@ -12,6 +12,7 @@ export default function Events({ cameras }: { cameras: Camera[] }) {
   const [searching, setSearching] = useState(false);
   const [faceFilter, setFaceFilter] = useState("");
   const [plateFilter, setPlateFilter] = useState("");
+  const [gestureFilter, setGestureFilter] = useState("");
 
   const runSearch = async () => {
     const q = query.trim();
@@ -96,10 +97,12 @@ export default function Events({ cameras }: { cameras: Camera[] }) {
 
   const labels = [...new Set(events.map((e) => e.label))];
   const faces = [...new Set(events.map((e) => e.face).filter(Boolean))] as string[];
+  const gestures = [...new Set(events.map((e) => e.gesture).filter(Boolean))] as string[];
   let shown =
     searchResults ??
     (review === "alerts" ? events.filter((e) => alertLabels.includes(e.label)) : events);
   if (faceFilter) shown = shown.filter((e) => e.face === faceFilter);
+  if (gestureFilter) shown = shown.filter((e) => e.gesture === gestureFilter);
   if (plateFilter.trim())
     shown = shown.filter((e) =>
       (e.plate ?? "").toUpperCase().includes(plateFilter.trim().toUpperCase())
@@ -171,6 +174,16 @@ export default function Events({ cameras }: { cameras: Camera[] }) {
             </option>
           ))}
         </select>
+        {gestures.length > 0 && (
+          <select value={gestureFilter} onChange={(e) => setGestureFilter(e.target.value)}>
+            <option value="">any signal</option>
+            {gestures.map((g) => (
+              <option key={g} value={g}>
+                ✋ {g}
+              </option>
+            ))}
+          </select>
+        )}
         <input
           type="text"
           placeholder="plate…"
@@ -199,6 +212,7 @@ export default function Events({ cameras }: { cameras: Camera[] }) {
                 <b>{ev.label}</b> {(ev.score * 100).toFixed(0)}% · {ev.camera}
                 {ev.face && <span style={{ color: "var(--ok)" }}> · 👤 {ev.face}</span>}
                 {ev.plate && <span style={{ color: "var(--warn)" }}> · 🚗 {ev.plate}</span>}
+                {ev.gesture && <span style={{ color: "var(--accent, #4f8cff)" }}> · ✋ {ev.gesture}</span>}
                 <div className="muted">{fmtTime(ev.ts)}</div>
                 <div className="row" style={{ marginTop: 8 }}>
                   <button

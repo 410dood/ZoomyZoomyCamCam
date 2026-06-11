@@ -20,6 +20,7 @@ function TuneModal({
     autotrack: camera.detect_config.autotrack ?? false,
     audio_detect: camera.detect_config.audio_detect ?? false,
     event_only_recording: camera.detect_config.event_only_recording ?? false,
+    gesture_detect: camera.detect_config.gesture_detect ?? false,
   });
   const [subSource, setSubSource] = useState(camera.detect_source ?? "");
 
@@ -114,6 +115,17 @@ function TuneModal({
               type="checkbox"
               checked={dc.audio_detect}
               onChange={() => setDc({ ...dc, audio_detect: !dc.audio_detect })}
+            />
+          </label>
+          <label
+            className="toggle field"
+            title="Offer the live hand-signal overlay (Signals page) for this camera."
+          >
+            hand signals
+            <input
+              type="checkbox"
+              checked={dc.gesture_detect}
+              onChange={() => setDc({ ...dc, gesture_detect: !dc.gesture_detect })}
             />
           </label>
           <label

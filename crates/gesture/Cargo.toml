@@ -1,0 +1,11 @@
+[package]
+name = "gesture"
+version = "0.1.0"
+description = "Hand-signal taxonomy + geometric gesture classifier (MediaPipe 21-landmark layout)"
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde.workspace = true

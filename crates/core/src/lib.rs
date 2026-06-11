@@ -96,6 +96,7 @@ pub async fn run(
     })?;
     let (mqtt_tx, mqtt_rx) = std::sync::mpsc::channel::<mqtt::EventMsg>();
     let mqtt_tx2 = mqtt_tx.clone();
+    let mqtt_tx_api = mqtt_tx.clone();
     let det_thread = std::thread::Builder::new().name("detector".into()).spawn({
         let (db, go2rtc, dir, stop) = (
             db.clone(),
@@ -154,6 +155,7 @@ pub async fn run(
         ffmpeg_bin: cfg.ffmpeg_bin.clone(),
         status: status_board,
         sessions: auth::Sessions::default(),
+        mqtt_tx: mqtt_tx_api,
     };
     let ui =
         ServeDir::new(&cfg.ui_dir).not_found_service(ServeFile::new(cfg.ui_dir.join("index.html")));

@@ -2,6 +2,7 @@
 import { api, AlarmRule, Camera } from "../api";
 
 const LABELS = ["person", "car", "truck", "bus", "bicycle", "motorcycle", "dog", "cat"];
+const GESTURES = ["open_palm", "fist", "victory", "point", "thumb_up", "thumb_down", "love", "ok", "call_me"];
 
 export default function Alarms({
   cameras,
@@ -16,6 +17,7 @@ export default function Alarms({
   const [label, setLabel] = useState("");
   const [faceLike, setFaceLike] = useState("");
   const [plateLike, setPlateLike] = useState("");
+  const [gestureLike, setGestureLike] = useState("");
   const [action, setAction] = useState<"webhook" | "mqtt" | "ntfy">("webhook");
   const [target, setTarget] = useState("");
   const [days, setDays] = useState<number[]>([]);
@@ -41,6 +43,7 @@ export default function Alarms({
         label: label || null,
         face_like: faceLike.trim() || null,
         plate_like: plateLike.trim() || null,
+        gesture_like: gestureLike || null,
         min_score: 0,
         action,
         target: target.trim(),
@@ -52,6 +55,7 @@ export default function Alarms({
       setTarget("");
       setFaceLike("");
       setPlateLike("");
+      setGestureLike("");
       setDays([]);
       setStartTime("");
       setEndTime("");
@@ -80,6 +84,7 @@ export default function Alarms({
       r.label ?? "any object",
       r.face_like ? `face ~ "${r.face_like}"` : null,
       r.plate_like ? `plate ~ "${r.plate_like}"` : null,
+      r.gesture_like ? `✋ ${r.gesture_like}` : null,
       sched ? `armed ${sched}` : null,
     ].filter(Boolean);
     return conds.join(" · ");
@@ -126,6 +131,17 @@ export default function Alarms({
             <label className="field">
               plate contains (optional)
               <input type="text" value={plateLike} onChange={(e) => setPlateLike(e.target.value)} placeholder="any plate" />
+            </label>
+            <label className="field">
+              hand signal (optional)
+              <select value={gestureLike} onChange={(e) => setGestureLike(e.target.value)}>
+                <option value="">any / none</option>
+                {GESTURES.map((g) => (
+                  <option key={g} value={g}>
+                    ✋ {g}
+                  </option>
+                ))}
+              </select>
             </label>
           </div>
           <div className="row" style={{ marginBottom: 12 }}>

@@ -291,6 +291,7 @@ pub fn run(
                     Some(&snap_rel),
                     face_names[i].as_deref(),
                     plates[i].as_deref(),
+                    None,
                 ) {
                     Ok(id) => {
                         tracing::info!(
@@ -325,6 +326,7 @@ pub fn run(
                             snapshot_path: Some(&snap_abs),
                             face: face_names[i].as_deref(),
                             plate: plates[i].as_deref(),
+                            gesture: None,
                         };
                         for rule in alarms.iter().filter(|r| {
                             r.matches(
@@ -333,6 +335,7 @@ pub fn run(
                                 d.score,
                                 face_names[i].as_deref(),
                                 plates[i].as_deref(),
+                                None,
                             )
                         }) {
                             crate::notify::fire(rule, &alarm_ev, &mqtt_tx);
