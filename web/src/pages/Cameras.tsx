@@ -1,5 +1,6 @@
 ﻿import { FormEvent, useEffect, useState } from "react";
 import { api, Camera, DetectConfig, DiscoveredCam, StatusMap, Zone } from "../api";
+import ZoneEditor from "../ZoneEditor";
 
 function TuneModal({
   camera,
@@ -17,6 +18,10 @@ function TuneModal({
     min_score: camera.detect_config.min_score,
     motion_threshold: camera.detect_config.motion_threshold,
     ignore_zones: [...camera.detect_config.ignore_zones],
+    zones: camera.detect_config.zones ? [...camera.detect_config.zones] : [],
+    privacy_masks: camera.detect_config.privacy_masks ? [...camera.detect_config.privacy_masks] : [],
+    min_area: camera.detect_config.min_area ?? null,
+    max_area: camera.detect_config.max_area ?? null,
     autotrack: camera.detect_config.autotrack ?? false,
     audio_detect: camera.detect_config.audio_detect ?? false,
     event_only_recording: camera.detect_config.event_only_recording ?? false,
@@ -101,6 +106,28 @@ function TuneModal({
               }
             />
           </label>
+          <label className="field" title="Drop detections smaller than this fraction of the frame area (kills far-field blips).">
+            min object size (0-1)
+            <input
+              type="number" step="0.005" min="0" max="1"
+              value={dc.min_area ?? ""}
+              placeholder="none"
+              onChange={(e) =>
+                setDc({ ...dc, min_area: e.target.value === "" ? null : Number(e.target.value) })
+              }
+            />
+          </label>
+          <label className="field" title="Drop detections larger than this fraction of the frame area (kills whole-frame lighting flips).">
+            max object size (0-1)
+            <input
+              type="number" step="0.05" min="0" max="1"
+              value={dc.max_area ?? ""}
+              placeholder="none"
+              onChange={(e) =>
+                setDc({ ...dc, max_area: e.target.value === "" ? null : Number(e.target.value) })
+              }
+            />
+          </label>
           <label className="toggle field">
             PTZ autotrack
             <input
@@ -141,10 +168,24 @@ function TuneModal({
           </label>
         </div>
 
-        <h2 style={{ marginTop: 18 }}>Ignore zones</h2>
+        <h2 style={{ marginTop: 18 }}>Zones &amp; privacy masks</h2>
         <p className="muted" style={{ marginTop: 0 }}>
-          Detections whose center falls inside a zone are dropped. Coordinates are fractions of
-          the frame (0–1) from the top-left.
+          Draw polygons on the live frame. <b style={{ color: "#36d399" }}>Required</b> zones keep
+          only objects inside them; <b style={{ color: "#f87272" }}>ignore</b> zones drop objects
+          inside; <b style={{ color: "#a3a3a3" }}>privacy masks</b> are blacked out before any
+          analysis or snapshot (continuous recordings are not masked).
+        </p>
+        <ZoneEditor
+          camera={camera}
+          zones={dc.zones}
+          masks={dc.privacy_masks}
+          onChange={(zones, masks) => setDc({ ...dc, zones, privacy_masks: masks })}
+        />
+
+        <h2 style={{ marginTop: 18 }}>Ignore zones (legacy rectangles)</h2>
+        <p className="muted" style={{ marginTop: 0 }}>
+          Detections whose center falls inside a rectangle are dropped. Coordinates are fractions of
+          the frame (0–1) from the top-left. Prefer the polygon zones above for new setups.
         </p>
         {dc.ignore_zones.map((z, i) => (
           <div className="row" key={i} style={{ marginBottom: 8 }}>

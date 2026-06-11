@@ -7,11 +7,24 @@ export interface Zone {
   h: number;
 }
 
+export type ZoneKind = "ignore" | "required";
+
+export interface PolyZone {
+  name: string;
+  points: [number, number][];
+  kind: ZoneKind;
+  labels: string[];
+}
+
 export interface DetectConfig {
   labels: string[] | null;
   min_score: number | null;
   motion_threshold: number | null;
   ignore_zones: Zone[];
+  zones: PolyZone[];
+  privacy_masks: [number, number][][];
+  min_area: number | null;
+  max_area: number | null;
   autotrack: boolean;
   audio_detect: boolean;
   event_only_recording: boolean;

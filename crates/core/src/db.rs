@@ -51,6 +51,66 @@ impl Zone {
     }
 }
 
+/// What a polygon zone does to detections whose anchor point falls inside it.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ZoneKind {
+    /// Drop matching detections inside the zone (e.g. a public sidewalk).
+    #[default]
+    Ignore,
+    /// Only keep matching detections that fall inside *some* required zone
+    /// (e.g. only alert on people actually on the driveway).
+    Required,
+}
+
+/// An arbitrary polygon zone in frame-fraction coordinates (0..1), so it
+/// survives resolution changes and sub-stream switches. Rectangles are just a
+/// 4-point special case — this supersedes [`Zone`] for new cameras while old
+/// rectangle `ignore_zones` keep working.
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct PolyZone {
+    pub name: String,
+    /// Polygon vertices as [x, y] fractions, in order. Needs ≥3 to have area.
+    pub points: Vec<[f32; 2]>,
+    pub kind: ZoneKind,
+    /// Object labels this zone applies to; empty = every object.
+    pub labels: Vec<String>,
+}
+
+impl PolyZone {
+    /// Even-odd ray-casting point-in-polygon test (point in frame fractions).
+    pub fn contains(&self, fx: f32, fy: f32) -> bool {
+        point_in_polygon(&self.points, fx, fy)
+    }
+
+    /// Does this zone govern detections of `label`? (Empty `labels` = all.)
+    pub fn applies_to(&self, label: &str) -> bool {
+        self.labels.is_empty() || self.labels.iter().any(|l| l == label)
+    }
+}
+
+/// Even-odd ray-casting point-in-polygon. Returns false for degenerate
+/// polygons (< 3 vertices).
+pub fn point_in_polygon(poly: &[[f32; 2]], x: f32, y: f32) -> bool {
+    if poly.len() < 3 {
+        return false;
+    }
+    let mut inside = false;
+    let mut j = poly.len() - 1;
+    for i in 0..poly.len() {
+        let (xi, yi) = (poly[i][0], poly[i][1]);
+        let (xj, yj) = (poly[j][0], poly[j][1]);
+        let intersects =
+            ((yi > y) != (yj > y)) && (x < (xj - xi) * (y - yi) / (yj - yi + f32::EPSILON) + xi);
+        if intersects {
+            inside = !inside;
+        }
+        j = i;
+    }
+    inside
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct DetectConfig {
@@ -62,8 +122,22 @@ pub struct DetectConfig {
     /// Override of the global motion threshold; `None` inherits.
     pub motion_threshold: Option<f32>,
     /// Detections whose box center falls in any of these are dropped —
-    /// e.g. a busy street at the edge of a driveway camera.
+    /// e.g. a busy street at the edge of a driveway camera. Legacy rectangles;
+    /// new cameras use `zones` (polygons). Both are honored.
     pub ignore_zones: Vec<Zone>,
+    /// Polygon zones (required / ignore), the richer successor to
+    /// `ignore_zones`. A `Required` zone makes detections valid only when their
+    /// anchor lands inside one; `Ignore` zones drop them.
+    pub zones: Vec<PolyZone>,
+    /// Polygon privacy masks: these regions are blacked out of the frame before
+    /// motion, detection and snapshots — nothing inside is analyzed or stored.
+    /// (Continuous recordings are packet-copied and are not masked.)
+    pub privacy_masks: Vec<Vec<[f32; 2]>>,
+    /// Object-size gate as a fraction of frame area (0..1). Detections smaller
+    /// than `min_area` or larger than `max_area` are dropped — kills tiny
+    /// far-field blips and whole-frame lighting flips. `None` = no bound.
+    pub min_area: Option<f32>,
+    pub max_area: Option<f32>,
     /// PTZ autotracking (Frigate-style): steer the camera to keep tracked
     /// objects centered. Only effective on ONVIF PTZ-capable cameras.
     pub autotrack: bool,
@@ -1158,6 +1232,15 @@ mod tests {
                 w: 0.5,
                 h: 0.5,
             }],
+            zones: vec![PolyZone {
+                name: "driveway".into(),
+                points: vec![[0.1, 0.1], [0.9, 0.1], [0.9, 0.9], [0.1, 0.9]],
+                kind: ZoneKind::Required,
+                labels: vec!["person".into()],
+            }],
+            privacy_masks: vec![vec![[0.0, 0.0], [0.2, 0.0], [0.2, 0.2], [0.0, 0.2]]],
+            min_area: Some(0.001),
+            max_area: Some(0.8),
             autotrack: true,
             audio_detect: false,
             event_only_recording: false,
@@ -1170,6 +1253,28 @@ mod tests {
         let z = back.detect_config.ignore_zones[0];
         assert!(z.contains(0.25, 0.25));
         assert!(!z.contains(0.75, 0.25));
+
+        let pz = &back.detect_config.zones[0];
+        assert_eq!(pz.kind, ZoneKind::Required);
+        assert!(pz.applies_to("person"));
+        assert!(!pz.applies_to("car"));
+    }
+
+    #[test]
+    fn point_in_polygon_math() {
+        // Unit square.
+        let sq = [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
+        assert!(point_in_polygon(&sq, 0.5, 0.5));
+        assert!(!point_in_polygon(&sq, 1.5, 0.5));
+        assert!(!point_in_polygon(&sq, -0.1, 0.5));
+
+        // Concave arrow / chevron: a point in the notch must read as outside.
+        let chevron = [[0.0, 0.0], [0.5, 0.4], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]];
+        assert!(point_in_polygon(&chevron, 0.5, 0.8)); // body
+        assert!(!point_in_polygon(&chevron, 0.5, 0.1)); // inside the V notch
+
+        // Degenerate polygons never contain anything.
+        assert!(!point_in_polygon(&[[0.0, 0.0], [1.0, 1.0]], 0.5, 0.5));
     }
 
     #[test]

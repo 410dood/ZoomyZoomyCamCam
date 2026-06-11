@@ -48,6 +48,7 @@ pub fn router(state: AppState) -> Router {
             get(get_camera).patch(patch_camera).delete(delete_camera),
         )
         .route("/api/cameras/{id}/ptz", get(ptz_caps).post(ptz_command))
+        .route("/api/cameras/{id}/frame.jpg", get(camera_frame))
         .route("/api/events", get(list_events))
         .route("/api/gesture", axum::routing::post(record_gesture))
         .route("/api/events/{id}/clip", get(event_clip))
@@ -360,6 +361,25 @@ async fn patch_camera(
                 return Err(bad_request("zone coordinates must be fractions 0..1"));
             }
         }
+        let in_unit = |p: &[f32; 2]| (0.0..=1.0).contains(&p[0]) && (0.0..=1.0).contains(&p[1]);
+        for z in &dc.zones {
+            if z.points.len() < 3 {
+                return Err(bad_request("a polygon zone needs at least 3 points"));
+            }
+            if !z.points.iter().all(in_unit) {
+                return Err(bad_request("zone points must be fractions 0..1"));
+            }
+        }
+        for m in &dc.privacy_masks {
+            if m.len() < 3 || !m.iter().all(in_unit) {
+                return Err(bad_request("a privacy mask needs ≥3 points in 0..1"));
+            }
+        }
+        for a in [dc.min_area, dc.max_area].into_iter().flatten() {
+            if !(0.0..=1.0).contains(&a) {
+                return Err(bad_request("object-size bounds must be fractions 0..1"));
+            }
+        }
         cam.detect_config = dc;
     }
     st.db.update_camera(&cam)?;
@@ -432,6 +452,29 @@ async fn ptz_command(
     .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
     result.map_err(|e| bad_request(format!("{e:#}")))?;
     Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+/// Proxy the camera's current decoded frame from go2rtc as a same-origin JPEG.
+/// The zone/mask editor draws on top of this still; serving it through the core
+/// API avoids the cross-origin taint that blocks reading go2rtc pixels directly.
+async fn camera_frame(State(st): State<AppState>, Path(id): Path<i64>) -> ApiResult<Response> {
+    let cam = st.db.get_camera(id)?.ok_or_else(not_found)?;
+    let url = format!("{}/api/frame.jpeg?src={}", st.go2rtc.api_base(), cam.name);
+    let bytes = tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<u8>> {
+        use std::io::Read as _;
+        let resp = ureq::get(&url)
+            .timeout(std::time::Duration::from_secs(5))
+            .call()?;
+        let mut buf = Vec::new();
+        resp.into_reader()
+            .take(32 * 1024 * 1024)
+            .read_to_end(&mut buf)?;
+        Ok(buf)
+    })
+    .await
+    .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(|e| ApiError(StatusCode::BAD_GATEWAY, format!("{e:#}")))?;
+    Ok(([(axum::http::header::CONTENT_TYPE, "image/jpeg")], bytes).into_response())
 }
 
 // --- events ----------------------------------------------------------------

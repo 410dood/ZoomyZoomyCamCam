@@ -91,7 +91,7 @@ pub fn run(
                 Some(_) => format!("{}_sub", cam.name),
                 None => cam.name.clone(),
             };
-            let frame = match fetch_frame(&go2rtc.api_base(), &stream_key) {
+            let mut frame = match fetch_frame(&go2rtc.api_base(), &stream_key) {
                 Ok(f) => {
                     status.frame_ok(cam.id, chrono::Local::now().timestamp());
                     f
@@ -102,6 +102,12 @@ pub fn run(
                     continue;
                 }
             };
+
+            // Privacy masks: black out the polygons before anything looks at the
+            // frame — motion gate, detector and snapshot all see the masked view.
+            if !cam.detect_config.privacy_masks.is_empty() {
+                apply_privacy_masks(&mut frame, &cam.detect_config.privacy_masks);
+            }
 
             let threshold = cam
                 .detect_config
@@ -147,13 +153,7 @@ pub fn run(
                 .iter()
                 .filter(|d| labels.is_empty() || labels.iter().any(|l| l == d.label))
                 .filter(|d| d.score >= min_score)
-                .filter(|d| {
-                    !in_ignore_zone(
-                        &cam.detect_config.ignore_zones,
-                        (d.x1 + d.x2) / 2.0 / fw,
-                        (d.y1 + d.y2) / 2.0 / fh,
-                    )
-                })
+                .filter(|d| passes_zones_and_size(d, &cam.detect_config, fw, fh))
                 .filter(|d| {
                     last_event
                         .get(&(cam.id, d.label))
@@ -567,10 +567,89 @@ fn post_webhook(
     }
 }
 
-/// True when a detection's box center (frame fractions) lands inside any
-/// ignore zone — e.g. the busy street at the edge of a driveway camera.
-fn in_ignore_zone(zones: &[crate::db::Zone], cx: f32, cy: f32) -> bool {
-    zones.iter().any(|z| z.contains(cx, cy))
+/// Apply per-camera zone and object-size gating to one detection. Returns true
+/// to keep it. The anchor is the box-center in frame fractions, matching the
+/// long-standing ignore-zone semantics.
+///
+/// Order: object-size bounds, legacy rectangle ignore zones, then polygon zones
+/// — a polygon `Ignore` zone drops the detection, and if any `Required` zone
+/// applies to its label the anchor must fall inside one of them.
+fn passes_zones_and_size(
+    d: &detector::Detection,
+    cfg: &crate::db::DetectConfig,
+    fw: f32,
+    fh: f32,
+) -> bool {
+    let cx = (d.x1 + d.x2) / 2.0 / fw;
+    let cy = (d.y1 + d.y2) / 2.0 / fh;
+
+    // Object-size gate (fraction of frame area).
+    if cfg.min_area.is_some() || cfg.max_area.is_some() {
+        let area = ((d.x2 - d.x1).max(0.0) * (d.y2 - d.y1).max(0.0)) / (fw * fh).max(1.0);
+        if cfg.min_area.is_some_and(|m| area < m) || cfg.max_area.is_some_and(|m| area > m) {
+            return false;
+        }
+    }
+
+    // Legacy rectangle ignore zones.
+    if cfg.ignore_zones.iter().any(|z| z.contains(cx, cy)) {
+        return false;
+    }
+
+    // Polygon ignore zones that apply to this label.
+    if cfg
+        .zones
+        .iter()
+        .filter(|z| z.kind == crate::db::ZoneKind::Required)
+        .any(|z| z.applies_to(d.label))
+    {
+        // Required zones exist for this label → the anchor must be in one.
+        let inside_required = cfg
+            .zones
+            .iter()
+            .filter(|z| z.kind == crate::db::ZoneKind::Required && z.applies_to(d.label))
+            .any(|z| z.contains(cx, cy));
+        if !inside_required {
+            return false;
+        }
+    }
+    if cfg.zones.iter().any(|z| {
+        z.kind == crate::db::ZoneKind::Ignore && z.applies_to(d.label) && z.contains(cx, cy)
+    }) {
+        return false;
+    }
+    true
+}
+
+/// Black out the privacy-mask polygons (frame-fraction coordinates) in place.
+fn apply_privacy_masks(frame: &mut DynamicImage, masks: &[Vec<[f32; 2]>]) {
+    let mut img = frame.to_rgb8();
+    let (w, h) = (img.width(), img.height());
+    for mask in masks {
+        if mask.len() < 3 {
+            continue;
+        }
+        // Only scan each polygon's bounding box.
+        let xs = mask.iter().map(|p| p[0]);
+        let ys = mask.iter().map(|p| p[1]);
+        let x0 = (xs.clone().fold(1.0f32, f32::min) * w as f32)
+            .floor()
+            .max(0.0) as u32;
+        let x1 = (xs.fold(0.0f32, f32::max) * w as f32).ceil().min(w as f32) as u32;
+        let y0 = (ys.clone().fold(1.0f32, f32::min) * h as f32)
+            .floor()
+            .max(0.0) as u32;
+        let y1 = (ys.fold(0.0f32, f32::max) * h as f32).ceil().min(h as f32) as u32;
+        for y in y0..y1 {
+            for x in x0..x1 {
+                let (fx, fy) = (x as f32 / w as f32, y as f32 / h as f32);
+                if crate::db::point_in_polygon(mask, fx, fy) {
+                    img.put_pixel(x, y, Rgb([0, 0, 0]));
+                }
+            }
+        }
+    }
+    *frame = DynamicImage::ImageRgb8(img);
 }
 
 fn sleep_responsive(total: Duration, shutdown: &AtomicBool) {
@@ -636,19 +715,139 @@ fn draw_rect(img: &mut image::RgbImage, x1: i64, y1: i64, x2: i64, y2: i64) {
 
 #[cfg(test)]
 mod tests {
-    use super::in_ignore_zone;
-    use crate::db::Zone;
+    use super::passes_zones_and_size;
+    use crate::db::{DetectConfig, PolyZone, Zone, ZoneKind};
+    use detector::Detection;
+
+    /// A detection whose box center is (cx, cy) in a 100x100 frame, sized w×h.
+    fn det_at(label: &'static str, cx: f32, cy: f32, w: f32, h: f32) -> Detection {
+        Detection {
+            label,
+            class: 0,
+            score: 0.9,
+            x1: cx - w / 2.0,
+            y1: cy - h / 2.0,
+            x2: cx + w / 2.0,
+            y2: cy + h / 2.0,
+        }
+    }
 
     #[test]
-    fn ignore_zone_drops_center_hits_only() {
-        let zones = vec![Zone {
-            x: 0.8,
-            y: 0.0,
-            w: 0.2,
-            h: 1.0,
-        }];
-        assert!(in_ignore_zone(&zones, 0.9, 0.5)); // street strip on the right
-        assert!(!in_ignore_zone(&zones, 0.5, 0.5)); // driveway center
-        assert!(!in_ignore_zone(&[], 0.9, 0.5)); // no zones -> nothing ignored
+    fn legacy_rect_ignore_zone_drops_center_hits_only() {
+        let cfg = DetectConfig {
+            ignore_zones: vec![Zone {
+                x: 0.8,
+                y: 0.0,
+                w: 0.2,
+                h: 1.0,
+            }],
+            ..Default::default()
+        };
+        assert!(!passes_zones_and_size(
+            &det_at("person", 90.0, 50.0, 4.0, 4.0),
+            &cfg,
+            100.0,
+            100.0
+        ));
+        assert!(passes_zones_and_size(
+            &det_at("person", 50.0, 50.0, 4.0, 4.0),
+            &cfg,
+            100.0,
+            100.0
+        ));
+        assert!(passes_zones_and_size(
+            &det_at("person", 90.0, 50.0, 4.0, 4.0),
+            &DetectConfig::default(),
+            100.0,
+            100.0
+        ));
+    }
+
+    #[test]
+    fn required_zone_keeps_only_inside_for_that_label() {
+        let cfg = DetectConfig {
+            zones: vec![PolyZone {
+                name: "driveway".into(),
+                points: vec![[0.0, 0.0], [0.5, 0.0], [0.5, 1.0], [0.0, 1.0]],
+                kind: ZoneKind::Required,
+                labels: vec!["person".into()],
+            }],
+            ..Default::default()
+        };
+        // Person inside the left-half required zone: kept; outside: dropped.
+        assert!(passes_zones_and_size(
+            &det_at("person", 25.0, 50.0, 4.0, 4.0),
+            &cfg,
+            100.0,
+            100.0
+        ));
+        assert!(!passes_zones_and_size(
+            &det_at("person", 75.0, 50.0, 4.0, 4.0),
+            &cfg,
+            100.0,
+            100.0
+        ));
+        // A car is unconstrained by a person-only required zone.
+        assert!(passes_zones_and_size(
+            &det_at("car", 75.0, 50.0, 4.0, 4.0),
+            &cfg,
+            100.0,
+            100.0
+        ));
+    }
+
+    #[test]
+    fn polygon_ignore_zone_drops_inside() {
+        let cfg = DetectConfig {
+            zones: vec![PolyZone {
+                name: "sidewalk".into(),
+                points: vec![[0.5, 0.0], [1.0, 0.0], [1.0, 1.0], [0.5, 1.0]],
+                kind: ZoneKind::Ignore,
+                labels: vec![],
+            }],
+            ..Default::default()
+        };
+        assert!(!passes_zones_and_size(
+            &det_at("person", 75.0, 50.0, 4.0, 4.0),
+            &cfg,
+            100.0,
+            100.0
+        ));
+        assert!(passes_zones_and_size(
+            &det_at("person", 25.0, 50.0, 4.0, 4.0),
+            &cfg,
+            100.0,
+            100.0
+        ));
+    }
+
+    #[test]
+    fn object_size_gate() {
+        let cfg = DetectConfig {
+            min_area: Some(0.01), // ≥ 1% of frame
+            max_area: Some(0.5),  // ≤ 50% of frame
+            ..Default::default()
+        };
+        // 4x4 in 100x100 = 0.0016 -> too small.
+        assert!(!passes_zones_and_size(
+            &det_at("person", 50.0, 50.0, 4.0, 4.0),
+            &cfg,
+            100.0,
+            100.0
+        ));
+        // 20x20 = 0.04 -> ok.
+        assert!(passes_zones_and_size(
+            &det_at("person", 50.0, 50.0, 20.0, 20.0),
+            &cfg,
+            100.0,
+            100.0
+        ));
+        // 90x90 = 0.81 -> too big.
+        assert!(!passes_zones_and_size(
+            &det_at("person", 50.0, 50.0, 90.0, 90.0),
+            &cfg,
+            100.0,
+            100.0
+        ));
     }
 }
