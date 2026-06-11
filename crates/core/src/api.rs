@@ -541,8 +541,12 @@ async fn record_gesture(
     }
     let canonical = gesture::canonical(&req.gesture)
         .ok_or_else(|| bad_request(format!("unknown gesture {:?}", req.gesture)))?;
-    // Honor the armed-gesture filter (empty = any recognized signal counts).
-    if !settings.gesture_labels.is_empty()
+    // The duress/help signal always fires (even if not in the armed list) —
+    // it's a panic button, so it must never be filtered out.
+    let is_duress = !settings.gesture_duress.is_empty() && canonical == settings.gesture_duress;
+    // Otherwise honor the armed-gesture filter (empty = any recognized signal).
+    if !is_duress
+        && !settings.gesture_labels.is_empty()
         && !settings.gesture_labels.iter().any(|g| g == canonical)
     {
         return Ok(Json(
@@ -620,6 +624,7 @@ async fn record_gesture(
     let webhook_url = settings.webhook_url.clone();
     let base_url = settings.public_base_url.clone();
     let webhook_template = settings.webhook_template.clone();
+    let health_ntfy = settings.health_ntfy_url.clone();
     let camera = cam.name.clone();
     let gesture_owned = canonical.to_string();
     let snap_path = snapshot.as_ref().map(|_| snap_abs.clone());
@@ -637,7 +642,18 @@ async fn record_gesture(
             gesture: Some(&gesture_owned),
             base_url: &base_url,
             webhook_template: &webhook_template,
+            duress: is_duress,
         };
+        // Guaranteed panic path: a duress signal pushes straight to the health
+        // ntfy topic at max urgency, even if no alarm rule is configured.
+        if is_duress && !health_ntfy.is_empty() {
+            crate::notify::ntfy_text(
+                &health_ntfy,
+                &format!("🚨 DURESS signal on {camera}"),
+                &format!("Hand-signal panic button triggered on {camera}"),
+                "warning,rotating_light,sos",
+            );
+        }
         if !webhook_url.is_empty() {
             let body = if webhook_template.is_empty() {
                 serde_json::json!({
@@ -672,6 +688,7 @@ async fn record_gesture(
         "event_id": id,
         "gesture": canonical,
         "camera": cam.name,
+        "duress": is_duress,
     })))
 }
 

@@ -66,6 +66,14 @@ export default function Signals({ cameras }: { cameras: Camera[] }) {
   const [status, setStatus] = useState("Idle — start the camera to read hand signals.");
   const [current, setCurrent] = useState<{ gesture: string; score: number } | null>(null);
   const [toast, setToast] = useState<string>("");
+  const [touchless, setTouchless] = useState(false);
+  const [ptzOk, setPtzOk] = useState<boolean | null>(null);
+  const [duressFlash, setDuressFlash] = useState(false);
+  const lastPtz = useRef(0);
+  // The rAF loop captures state at start; mirror live controls into refs.
+  const touchlessRef = useRef(false);
+  const ptzOkRef = useRef(false);
+  const camIdRef = useRef<number | undefined>(undefined);
 
   useEffect(() => {
     api.settings().then(setSettings).catch(() => {});
@@ -76,7 +84,30 @@ export default function Signals({ cameras }: { cameras: Camera[] }) {
 
   const armed = settings?.gesture_labels ?? [];
   const holdSecs = settings?.gesture_hold_secs ?? 1.5;
-  const isArmed = (g: string) => armed.length === 0 || armed.includes(g);
+  const duress = settings?.gesture_duress ?? "";
+  // The duress signal always fires, even when not in the armed list.
+  const isArmed = (g: string) => g === duress || armed.length === 0 || armed.includes(g);
+  const camId = cameras.find((c) => c.name === camera)?.id;
+
+  useEffect(() => {
+    touchlessRef.current = touchless;
+  }, [touchless]);
+  useEffect(() => {
+    ptzOkRef.current = !!ptzOk;
+  }, [ptzOk]);
+  useEffect(() => {
+    camIdRef.current = camId;
+  }, [camId]);
+
+  // Does the attributed camera answer PTZ? (gates touchless steering)
+  useEffect(() => {
+    setPtzOk(null);
+    if (camId == null) return;
+    api
+      .ptzCaps(camId)
+      .then((r) => setPtzOk(r.supported))
+      .catch(() => setPtzOk(false));
+  }, [camId]);
 
   const stop = () => {
     cancelAnimationFrame(rafRef.current);
@@ -126,7 +157,12 @@ export default function Signals({ cameras }: { cameras: Camera[] }) {
   const fire = async (g: string) => {
     try {
       const r = await api.recordGesture({ gesture: g, camera: camera || undefined });
-      if (r.recorded) {
+      if (r.duress) {
+        setDuressFlash(true);
+        setToast(`🚨 DURESS — ${pretty(g)} — high-priority alert sent`);
+        setTimeout(() => setDuressFlash(false), 6000);
+        setTimeout(() => setToast(""), 6000);
+      } else if (r.recorded) {
         setToast(`${pretty(g)} → signal sent`);
         setTimeout(() => setToast(""), 2500);
       }
@@ -164,6 +200,25 @@ export default function Signals({ cameras }: { cameras: Camera[] }) {
     const cats: any[] = (result?.gestures ?? []).map((g: any[]) => g[0]).filter(Boolean);
     const best = cats.sort((a, b) => b.score - a.score)[0];
     const now = performance.now();
+
+    // Touchless PTZ: steer the camera toward an OPEN PALM (the hand's position
+    // in frame), and STOP on a fist. Throttled, and only on PTZ cameras.
+    const tcam = camIdRef.current;
+    if (touchlessRef.current && ptzOkRef.current && tcam != null && hands[0] && now - lastPtz.current > 350) {
+      lastPtz.current = now;
+      const g = best && best.categoryName !== "None" ? canon(best.categoryName) : "";
+      const palm = hands[0][9] ?? hands[0][0]; // middle-finger MCP ≈ palm center
+      // Display is mirrored, so invert pan for intuitive control. Tilt up = -dy.
+      const dx = -(palm.x - 0.5);
+      const dy = palm.y - 0.5;
+      if (g === "open_palm" && (Math.abs(dx) > 0.12 || Math.abs(dy) > 0.12)) {
+        const pan = Math.max(-0.5, Math.min(0.5, dx * 1.2));
+        const tilt = Math.max(-0.5, Math.min(0.5, -dy * 1.2));
+        api.ptz(tcam, { action: "move", pan, tilt, zoom: 0 }).catch(() => {});
+      } else {
+        api.ptz(tcam, { action: "stop" }).catch(() => {});
+      }
+    }
     if (best && best.categoryName !== "None") {
       const g = canon(best.categoryName);
       setCurrent({ gesture: g, score: best.score });
@@ -223,8 +278,29 @@ export default function Signals({ cameras }: { cameras: Camera[] }) {
               ))}
             </select>
           </label>
+          {ptzOk && (
+            <label className="toggle field" title="Steer this PTZ camera with an open palm; make a fist to stop.">
+              touchless PTZ
+              <input type="checkbox" checked={touchless} onChange={() => setTouchless((t) => !t)} />
+            </label>
+          )}
           <span className="muted">{status}</span>
         </div>
+
+        {duressFlash && (
+          <div
+            style={{
+              background: "var(--danger, #e5484d)",
+              color: "#fff",
+              padding: "10px 14px",
+              borderRadius: 8,
+              fontWeight: 700,
+              marginBottom: 10,
+            }}
+          >
+            🚨 DURESS signal sent — a high-priority alert went out.
+          </div>
+        )}
 
         <div
           style={{

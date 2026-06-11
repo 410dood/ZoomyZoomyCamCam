@@ -36,6 +36,8 @@ pub struct AlarmEvent<'a> {
     /// Optional webhook body template ({{placeholder}} form). Empty = default
     /// detection JSON.
     pub webhook_template: &'a str,
+    /// Duress/panic event: force max push urgency and a distinct alarm tag.
+    pub duress: bool,
 }
 
 /// JSON-escape a value so substituting it into a JSON template stays valid.
@@ -184,12 +186,22 @@ fn ntfy(url: &str, rule_name: &str, priority: u8, ev: &AlarmEvent) {
         ))
     };
 
+    // Duress overrides: max urgency, a distinct siren tag, and a flagged title.
+    let title = if ev.duress {
+        format!("🚨 DURESS — {rule_name}")
+    } else {
+        rule_name.to_string()
+    };
+    let (tags, eff_priority) = if ev.duress {
+        ("warning,rotating_light,sos", 5)
+    } else {
+        ("rotating_light", priority)
+    };
+
     let apply = |req: ureq::Request| {
-        let mut req = req
-            .set("X-Title", rule_name)
-            .set("X-Tags", "rotating_light");
-        if (1..=5).contains(&priority) {
-            req = req.set("X-Priority", &priority.to_string());
+        let mut req = req.set("X-Title", &title).set("X-Tags", tags);
+        if (1..=5).contains(&eff_priority) {
+            req = req.set("X-Priority", &eff_priority.to_string());
         }
         if let Some(a) = &actions {
             req = req.set("X-Actions", a);
@@ -277,6 +289,7 @@ mod tests {
             gesture: None,
             base_url: "",
             webhook_template: "",
+            duress: false,
         };
         let out = render_template(
             r#"{"cam":"{{camera}}","obj":"{{label}}","who":"{{face}}","p":{{score}},"miss":"{{nope}}"}"#,

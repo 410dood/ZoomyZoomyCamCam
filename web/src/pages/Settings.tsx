@@ -212,6 +212,19 @@ export default function Settings({ onError }: { onError: (e: string) => void }) 
                 }
               />
             </label>
+            <label className="field" title="A silent panic signal: when recognized it always fires at max push urgency (and pushes to the health ntfy topic), even if not in the armed list.">
+              duress / help signal
+              <select value={s.gesture_duress ?? ""} onChange={(e) => set({ gesture_duress: e.target.value })}>
+                <option value="">none</option>
+                {["open_palm", "fist", "victory", "point", "thumb_up", "thumb_down", "love", "ok", "call_me"].map(
+                  (g) => (
+                    <option key={g} value={g}>
+                      {g}
+                    </option>
+                  )
+                )}
+              </select>
+            </label>
             <label className="field" style={{ flex: 1, minWidth: 320 }}>
               model URL (MediaPipe .task; default = Google CDN, override to self-host offline)
               <input

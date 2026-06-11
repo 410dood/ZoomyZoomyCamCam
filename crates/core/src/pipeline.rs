@@ -375,6 +375,7 @@ pub fn run(
                             gesture: None,
                             base_url: &settings.public_base_url,
                             webhook_template: &settings.webhook_template,
+                            duress: false,
                         };
                         for rule in alarms.iter().filter(|r| {
                             r.matches(
@@ -628,6 +629,7 @@ fn post_webhook(
             gesture: None,
             base_url: "",
             webhook_template: template,
+            duress: false,
         };
         ureq::post(url)
             .timeout(Duration::from_secs(3))

@@ -438,6 +438,10 @@ pub struct Settings {
     /// Canonical gesture names that produce events (see the `gesture` crate's
     /// taxonomy). Empty = every recognized signal.
     pub gesture_labels: Vec<String>,
+    /// A "duress"/help hand signal. When this signal is recognized, the gesture
+    /// event is flagged high-priority and pushes go out at max urgency with a
+    /// distinct tag — a silent panic button. Empty = no duress signal.
+    pub gesture_duress: String,
     /// MediaPipe gesture-recognizer task bundle the browser loads. Defaults to
     /// Google's CDN; point it at a self-hosted copy for fully offline use.
     pub gesture_model_url: String,
@@ -510,6 +514,7 @@ impl Default for Settings {
             gesture_labels: ["open_palm", "victory", "thumb_up"]
                 .map(String::from)
                 .to_vec(),
+            gesture_duress: String::new(),
             gesture_model_url: "https://storage.googleapis.com/mediapipe-models/\
                 gesture_recognizer/gesture_recognizer/float16/1/gesture_recognizer.task"
                 .into(),

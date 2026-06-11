@@ -105,6 +105,7 @@ export interface Settings {
   gesture_recognition: boolean;
   gesture_hold_secs: number;
   gesture_labels: string[];
+  gesture_duress: string;
   gesture_model_url: string;
 }
 
@@ -226,7 +227,7 @@ export const api = {
     return req<CamEvent[]>(`/api/events?${p}`);
   },
   recordGesture: (body: { camera?: string; gesture: string; score?: number }) =>
-    req<{ recorded: boolean; event_id?: number; gesture?: string; reason?: string }>(
+    req<{ recorded: boolean; event_id?: number; gesture?: string; reason?: string; duress?: boolean }>(
       "/api/gesture",
       { method: "POST", body: JSON.stringify(body) }
     ),
